@@ -163,7 +163,12 @@ def apply_cli_overrides(
 
 def ensure_logging_dir(config: Dict[str, Any]) -> str:
     log_dir = config["logging"].get("dir", "logs")
-    log_dir = resolve_runtime_path(log_dir)
+    if not log_dir:
+        log_dir = "logs"
+    expanded = os.path.expanduser(log_dir)
+    if not os.path.isabs(expanded):
+        expanded = os.path.join(get_app_root(), expanded)
+    log_dir = expanded
 
     os.makedirs(log_dir, exist_ok=True)
     return log_dir
@@ -175,10 +180,18 @@ def get_app_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def get_resource_root() -> str:
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return os.path.abspath(meipass)
+    return get_app_root()
+
+
 def resolve_runtime_path(path: Optional[str]) -> Optional[str]:
     if not path:
         return path
     expanded = os.path.expanduser(path)
     if os.path.isabs(expanded):
         return expanded
-    return os.path.join(get_app_root(), expanded)
+    return os.path.join(get_resource_root(), expanded)
