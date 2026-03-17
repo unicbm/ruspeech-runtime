@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import tempfile
 import threading
 import time
 import wave
@@ -181,10 +180,9 @@ class VoiceRuntimeController:
 
         recent_path = Path(self.log_dir) / "recent.wav"
         os.makedirs(recent_path.parent, exist_ok=True)
-        tmp_fd, tmp_path = tempfile.mkstemp(prefix="recent_", suffix=".wav", dir=recent_path.parent)
-        os.close(tmp_fd)
+        tmp_path = recent_path.parent / f".recent-{self._session_id}-{threading.get_ident()}.tmp.wav"
         try:
-            with wave.open(tmp_path, "wb") as wav_file:
+            with wave.open(str(tmp_path), "wb") as wav_file:
                 wav_file.setnchannels(1)
                 wav_file.setsampwidth(2)
                 wav_file.setframerate(self.config["source"]["sample_rate"])
@@ -192,6 +190,9 @@ class VoiceRuntimeController:
                 wav_file.writeframes((pcm * 32767.0).astype(np.int16).tobytes())
             os.replace(tmp_path, recent_path)
             self.last_segment_path = recent_path
+        except OSError as exc:
+            logger.warning("Unable to persist recent audio to %s: %s", recent_path, exc)
+            self.last_segment_path = None
         finally:
             if os.path.exists(tmp_path):
                 try:

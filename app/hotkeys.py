@@ -6,7 +6,23 @@ import logging
 import threading
 from typing import Callable
 
-import keyboard
+try:
+    import keyboard
+except ImportError:  # pragma: no cover - exercised in dependency-light test envs
+    class _MissingKeyboardModule:
+        def hook(self, *args, **kwargs):
+            raise RuntimeError("keyboard package is required for global hotkeys")
+
+        def unhook(self, *args, **kwargs):
+            return None
+
+        def remove_hotkey(self, *args, **kwargs):
+            return None
+
+        def unhook_all(self) -> None:
+            return None
+
+    keyboard = _MissingKeyboardModule()
 
 
 logger = logging.getLogger(__name__)
@@ -57,7 +73,7 @@ class HotkeyManager:
                 callback()
 
         with self._lock:
-            hook = keyboard.hook(handler)
+            hook = keyboard.hook(handler, suppress=True)
             self._registrations.append(("hook", hook))
             logger.info("Registered toggle hotkey %s", combo)
 
@@ -90,9 +106,10 @@ class HotkeyManager:
                 state["active"] = False
                 on_release()
 
-        hook = keyboard.hook(handler)
-        self._registrations.append(("hook", hook))
-        logger.info("Registered push-to-talk combo %s", combo)
+        with self._lock:
+            hook = keyboard.hook(handler, suppress=True)
+            self._registrations.append(("hook", hook))
+            logger.info("Registered push-to-talk combo %s", combo)
 
     def cleanup(self) -> None:
         with self._lock:

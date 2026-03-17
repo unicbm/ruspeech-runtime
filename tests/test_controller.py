@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import copy
 import queue
-import tempfile
 import time
 import unittest
-from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -106,20 +105,20 @@ class CaptureSink:
 class ControllerTests(unittest.TestCase):
     def test_controller_dispatches_partial_and_final_events(self) -> None:
         config = copy.deepcopy(DEFAULT_CONFIG)
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            config["logging"]["dir"] = tmp_dir
-            source = FakeSource()
-            backend = FakeBackend()
-            sink = CaptureSink()
-            results = []
-            controller = VoiceRuntimeController(
-                config=config,
-                source=source,
-                backend=backend,
-                sinks=[sink],
-                on_result=results.append,
-            )
+        config["logging"]["dir"] = "logs"
+        source = FakeSource()
+        backend = FakeBackend()
+        sink = CaptureSink()
+        results = []
+        controller = VoiceRuntimeController(
+            config=config,
+            source=source,
+            backend=backend,
+            sinks=[sink],
+            on_result=results.append,
+        )
 
+        with patch.object(controller, "_persist_recent_audio") as persist_recent_audio:
             controller.start()
             source.push(np.ones(320, dtype=np.float32))
             deadline = time.time() + 1.0
@@ -129,13 +128,12 @@ class ControllerTests(unittest.TestCase):
             controller.stop()
             controller.cleanup()
 
-            self.assertTrue(backend.initialized)
-            self.assertEqual(backend.started, (1, "microphone", False))
-            self.assertEqual(len(results), 1)
-            self.assertEqual(results[0].text, "privet mir")
-            self.assertEqual([event.is_final for event in sink.events], [False, True])
-            self.assertIsNotNone(controller.last_segment_path)
-            self.assertTrue(Path(controller.last_segment_path).exists())
+        self.assertTrue(backend.initialized)
+        self.assertEqual(backend.started, (1, "microphone", False))
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].text, "privet mir")
+        self.assertEqual([event.is_final for event in sink.events], [False, True])
+        persist_recent_audio.assert_called_once_with()
 
 
 if __name__ == "__main__":

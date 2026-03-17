@@ -25,7 +25,8 @@ class SherpaOnnxBackend(ASRBackend):
         self.config = config
         self.asr_cfg = config["asr"]
         self.sherpa_cfg = self.asr_cfg.get("sherpa", {})
-        self.sample_rate = int(config["source"]["sample_rate"])
+        self.input_sample_rate = int(config["source"]["sample_rate"])
+        self.model_sample_rate = int(self.sherpa_cfg.get("sample_rate", self.input_sample_rate))
         self.language = self.asr_cfg.get("language", "ru")
         self.enable_endpoint_detection = bool(self.asr_cfg.get("enable_endpoint_detection", True))
         self._recognizer = None
@@ -58,7 +59,7 @@ class SherpaOnnxBackend(ASRBackend):
         common_kwargs = {
             "tokens": tokens,
             "num_threads": num_threads,
-            "sample_rate": self.sample_rate,
+            "sample_rate": self.model_sample_rate,
             "feature_dim": int(self.sherpa_cfg.get("feature_dim", 80)),
             "enable_endpoint_detection": self.enable_endpoint_detection,
             "rule1_min_trailing_silence": float(self.asr_cfg.get("rule1_min_trailing_silence", 1.2)),
@@ -106,7 +107,11 @@ class SherpaOnnxBackend(ASRBackend):
         except Exception as exc:
             raise BackendInitializationError(f"Unable to initialize sherpa-onnx: {exc}") from exc
 
-        logger.info("Sherpa-ONNX backend initialized")
+        logger.info(
+            "Sherpa-ONNX backend initialized, input_sample_rate=%sHz model_sample_rate=%sHz",
+            self.input_sample_rate,
+            self.model_sample_rate,
+        )
 
     def start_stream(self, session_id: int, source_kind: str, continuous_segments: bool) -> None:
         self.initialize()
@@ -133,9 +138,9 @@ class SherpaOnnxBackend(ASRBackend):
         if samples.size == 0:
             return []
 
-        self._audio_seconds += samples.size / float(self.sample_rate)
+        self._audio_seconds += samples.size / float(self.input_sample_rate)
         started_at = time.monotonic()
-        self._stream.accept_waveform(self.sample_rate, samples)
+        self._stream.accept_waveform(self.input_sample_rate, samples)
         self._decode_ready()
         latency_ms = (time.monotonic() - started_at) * 1000.0
 
@@ -231,6 +236,7 @@ class SherpaOnnxBackend(ASRBackend):
         else:
             self._stream = self._recognizer.create_stream()
         self._last_partial_text = ""
+        self._last_final_text = ""
         self._audio_seconds = 0.0
 
     def _make_event(self, text: str, is_final: bool, latency_ms: float) -> RecognitionEvent:
