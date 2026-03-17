@@ -1,135 +1,240 @@
-# VocoType - 精准的离线语音输入法
+# Ruspeech Runtime
 
-<h2 align="center">您的声音，绝不离开电脑</h2>
+本仓库现在是一个面向 Windows 的本地语音工具原型，重点是两件事：
+- 俄语麦克风实时输入
+- 系统音频实时字幕
 
-**VocoType** 是一款专为注重隐私和效率的专业人士打造的、**完全免费**的桌面端语音输入法。所有识别均在本地完成，无惧断网，不上传任何数据。
+它最初来自 `vocotype-cli` 的工程骨架，但当前代码路径已经不再等同于原项目的 FunASR 中英输入法定位。现阶段的默认架构是：
+- `AudioSource`: 麦克风 / WASAPI loopback
+- `ASRBackend`: 默认 `sherpa-onnx`
+- `OutputSink`: 直接上屏 / 控制台字幕 / 浮窗字幕
 
-这个 GitHub 项目是 VocoType 核心引擎的 **CLI (命令行) 开源版本**，主要面向开发者。
+## 仓库地址
 
----
+当前项目仓库：
 
-### **➡️ 想获得最佳体验？请立即下载免费桌面版！**
-
-开箱即用，功能更完整，无需任何技术背景。
-
-**[立即访问官网，下载免费、完整的 VocoType 桌面版](https://vocotype.com)**
-
-## 功能简介
-
-VocoType 是一款智能语音输入工具，通过快捷键即可将语音实时转换为文字并自动输入到当前应用。支持MCP语音转文字、 AI 优化文本、自定义替换词典等功能，让语音输入更高效、更准确。
-
-### 📹 演示视频
-
-<video controls width="100%">
-  <source src="https://s1.bib0.com/leilei/i/2025/11/04/5yba.mp4" type="video/mp4">
-  您的浏览器不支持视频播放。
-</video>
-
-
-## 下载
-
-| OS | Download |
-|---|---|
-| **Windows** | [![Setup](https://img.shields.io/badge/Setup-x64-blue)](https://github.com/233stone/vocotype-cli/releases/download/v1.4.2/VocoType_1.4.2_x64-setup.exe)  | 
-| **macOS** | [![DMG](https://img.shields.io/badge/DMG-Apple%20Silicon-black)](https://github.com/233stone/vocotype-cli/releases/download/v1.4.2/VocoType_1.4.2_Universal.dmg) [![DMG](https://img.shields.io/badge/DMG-Intel-black)](https://github.com/233stone/vocotype-cli/releases/download/v1.4.2/VocoType_1.4.2_Universal.dmg)  |
----
-
-
-
-## 🤔 VocoType 为何与众不同？
-
-| 特性           |    ✅ **VocoType**     |  传统云端输入法   |  操作系统自带   |
-| :------------- | :--------------------: | :---------------: | :-------------: |
-| **隐私安全**   | **本地离线，绝不上传** | ❌ 数据需上传云端 | ⚠️ 隐私政策复杂 |
-| **网络依赖**   |    **完全无需联网**    |  ❌ 必须联网使用  |  ❌ 强依赖网络  |
-| **响应速度**   |      **0.1 秒级**      |  慢，受网速影响   | 慢，受网速影响  |
-| **定制化能力** |  **强大的自定义词表**  |      弱或无       |    基本没有     |
-
-## ✅ 核心功能
-
-- **完整的图形用户界面**：开箱即用，所有操作清晰直观。
-- **系统级全局输入**：在任何软件、任何文本框内都能直接语音输入。
-- **自定义词典**：支持添加 20 个常用术语、人名，提升识别准确率。
-- **100% 离线运行**：绝对的隐私和数据安全。
-- **旗舰级识别引擎**：精准识别中英混合内容。
-- **AI 智能优化**：支持选择多种 AI 模型，通过可定制的 Prompt 模板自动修正语音转录中的错别字、同音字和自我修正，智能识别口语中的修正指令（如"不对"、"改成"等），让输出文本更准确流畅。
-
-_(对于有更高需求的专业用户，应用内提供了升级到 Pro 版的选项，以解锁无限词典等高级功能。)_
-
-## 🎯 适用各类专业场景
-
-无论是文字工作者、律师、学者、游戏玩家，还是日常办公，VocoType 都能成为您值得信赖的效率伙伴。
-
-| 用户                | 场景                                                                                           |
-| :------------------ | :--------------------------------------------------------------------------------------------- |
-| **作家与创作者**    | 撰写文章、小说，整理会议纪要，让思绪通过语音即时转化为文字，心无旁骛，专注于创作本身。         |
-| **法律 & 医疗人士** | 处理高度敏感的客户信息或病历时，100%离线确保数据安全。自定义词表更能轻松驾驭行业术语。         |
-| **学生与学者**      | 快速记录课堂笔记、整理访谈录音、撰写学术论文。告别繁琐的打字，将更多精力投入到思考与研究之中。 |
-| **开发者 & 程序员** | 无论是与 AI 结对编程，还是撰写技术文档，都能精准识别 `function`、`Kubernetes pod` 等专业术语。 |
-| **游戏玩家**        | 在激烈的游戏对战中，通过语音快速打字与队友交流，无需停下操作，保持游戏节奏，提升团队协作效率。 |
-
-## ✨ VocoType 核心引擎特性
-
-_所有 VocoType 版本共享同一个强大的核心引擎。_
-
-- **🛡️ 100% 离线，隐私无忧**：所有语音识别在您的电脑本地完成。
-- **⚡️ 旗舰级识别引擎**：中英混合输入同样精准，告别反复修改。
-- **⚙️ 高度可定制**：独创的替换词表功能，让人名、地名、行业术语一次就对。
-- **💻 轻量化设计**：仅需 700MB 内存，纯 CPU 推理，无需昂贵显卡。
-- **🚀 0.1 秒级响应**：感受所言即所得的畅快，让您的灵感不再因等待而中断。
-
----
-
-## 🛠️ 【开发者专属】CLI 版安装指南
-
-**请注意：** 此版本面向有一定技术背景的开发者。如果您不熟悉命令行，我们强烈建议您访问官网，下载简单易用的 **VocoType 免费桌面版**。
-
-### 1. 环境依赖
-
-- Python 3.12
-- 我们强烈建议使用 `uv` 或 `venv` 创建虚拟环境。
-
-### 2. 克隆与安装
-
-```bash
-# 1. 克隆仓库
-git clone https://github.com/233stone/vocotype-cli.git
-cd vocotype-cli
-
-# 2. (推荐) 创建并激活虚拟环境
-pip install uv
-uv venv --python 3.12
-source .venv/bin/activate  # macOS/Linux
-# 或者 .\.venv\Scripts\activate  (Windows)
-
-# 3. 安装依赖
-uv pip install -r requirements.txt
-
-# 4. 运行
-python main.py
-
-# 保存数据集运行
-python main.py --save-dataset
+```text
+https://github.com/unicbm/ruspeech-runtime
 ```
 
-> **模型下载**：首次运行时，程序会自动下载约 500MB 的模型文件，请确保网络连接稳定。
+如果你本地目录还叫 `vocotype-cli`，那只是迁移过程中的旧目录名，不代表项目正式名称。
 
-## 常见问题 (FAQ)
+## 当前能力
 
-**Q: 我的数据安全吗？**
+- `dictation` 模式：麦克风语音转文本，最终文本直接输入到当前窗口
+- `subtitles` 模式：抓系统播放音频，输出实时字幕
+- 输入源：
+  - `microphone`
+  - `loopback`
+- 热键交互：
+  - `toggle`
+  - `push-to-talk`
+- 输出端：
+  - `type_text`
+  - `console_subtitles`
+  - `overlay_subtitles`
 
-> A: **100%安全**。所有语音识别均在本地离线完成，您的音频数据不会上传到任何服务器。
+## 当前状态
 
-## 📞 联系我们
+这是一个正在重构中的开发者仓库，不是完整打包发布版。
 
-- **Bug 与建议**：请优先使用 GitHub Issues。
-- **关注我们获取最新动态**：[https://vocotype.com](https://vocotype.com)
+已经完成：
+- 新的流式运行时骨架
+- 配置迁移层
+- `sherpa-onnx` 默认后端接入
+- Windows 文本注入输出
+- 控制台字幕和 Tk 浮窗字幕
 
-## 🙏 致谢
+还没完成或还不稳定：
+- `Vosk` / `Qwen3-ASR` 后端实现
+- 自动下载和管理 sherpa 模型
+- 更成熟的字幕 UI
+- 更细的 loopback 设备/进程选择
 
-VocoType 的诞生离不开以下优秀的开源项目：
+## 目录结构
 
-- **[FunASR](https://github.com/modelscope/FunASR)** - 阿里巴巴达摩院开源的语音识别框架，为 VocoType 提供了强大的离线语音识别能力。
-- **[QuQu](https://github.com/yan5xu/ququ)** - 优秀的开源项目，为 VocoType 提供了重要的技术参考和灵感。
+主要的新运行时文件：
 
-感谢这些开源社区的无私贡献！
+```text
+main.py
+app/
+  audio_sources.py
+  asr_backends.py
+  controller.py
+  output_sinks.py
+  runtime_types.py
+  config.py
+  hotkeys.py
+```
+
+仓库里仍保留了一部分旧的 FunASR 代码，当前默认启动路径不会使用它们。
+
+## 依赖
+
+推荐：
+- Python 3.12
+- Windows 10/11
+
+运行时依赖见 `requirements.txt`，当前默认链路会用到：
+- `numpy`
+- `keyboard`
+- `sounddevice`
+- `soundcard`
+- `sherpa-onnx`
+
+安装：
+
+```bash
+git clone https://github.com/unicbm/ruspeech-runtime.git
+cd ruspeech-runtime
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+## 模型准备
+
+默认后端是 `sherpa-onnx`，配置默认指向：
+
+```text
+models/sherpa-onnx-ru-streaming
+```
+
+你需要自行把俄语 streaming 模型放到该目录，或者在配置里显式指定这些文件：
+- `tokens.txt`
+- `encoder.onnx`
+- `decoder.onnx`
+- `joiner.onnx`
+
+如果你使用的是单文件模型，也可以配置：
+- `model.onnx`
+或
+- `paraformer`
+
+当前仓库还没有内置模型下载器。
+
+## 启动
+
+默认启动：
+
+```bash
+python main.py
+```
+
+切换模式或输入源：
+
+```bash
+python main.py --mode subtitles --source loopback
+python main.py --mode dictation --source microphone
+```
+
+覆盖后端：
+
+```bash
+python main.py --backend sherpa-onnx
+```
+
+调试单次采集：
+
+```bash
+python main.py --once
+```
+
+保存最近一次音频和结果数据集：
+
+```bash
+python main.py --save-dataset --dataset-dir dataset
+```
+
+## 配置
+
+配置文件仍是 JSON。当前默认配置大致如下：
+
+```json
+{
+  "mode": "dictation",
+  "source": {
+    "type": "microphone",
+    "device": null,
+    "sample_rate": 16000,
+    "channels": 1,
+    "frame_ms": 20
+  },
+  "hotkeys": {
+    "mode": "toggle",
+    "toggle": "f2",
+    "push_to_talk": "f4"
+  },
+  "asr": {
+    "backend": "sherpa-onnx",
+    "language": "ru"
+  },
+  "output": {
+    "sinks": ["type_text"]
+  }
+}
+```
+
+字幕模式常见配置：
+
+```json
+{
+  "mode": "subtitles",
+  "source": {
+    "type": "loopback",
+    "sample_rate": 16000,
+    "channels": 2,
+    "frame_ms": 20
+  },
+  "output": {
+    "sinks": ["console_subtitles", "overlay_subtitles"]
+  }
+}
+```
+
+兼容性说明：
+- 旧版 `audio.sample_rate` / `audio.block_ms` 配置会自动迁移到新 `source` 结构
+- 旧配置默认仍按麦克风输入法处理
+
+## 热键行为
+
+`toggle`：
+- 按一次开始
+- 再按一次结束
+
+`push-to-talk`：
+- 按下组合键开始采集
+- 松开任一组成键结束并提交 final 结果
+
+## 测试
+
+当前已添加基础单元测试：
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+语法检查：
+
+```bash
+python -m compileall main.py app tests
+```
+
+## 后续建议
+
+如果你准备把它作为独立项目继续做，下一步最值得补的是：
+- 在 GitHub 上重命名仓库
+- 清理或归档旧 FunASR 路径
+- 增加 sherpa 模型下载与校验
+- 增加示例配置文件
+- 增加真实设备 smoke test 文档
+
+## 致谢
+
+本仓库当前主要借鉴或依赖这些项目：
+- `sherpa-onnx`
+- `sounddevice`
+- `soundcard`
+- `keyboard`
+
+历史上它也继承了原 `vocotype-cli` 的交互骨架思路，但当前功能定位已经不同。

@@ -1,21 +1,16 @@
-"""Core runtime package for the speak-keyboard application."""
+"""Core runtime exports for the streaming voice application."""
 
-from .config import DEFAULT_CONFIG, ensure_logging_dir, load_config
-from .audio_capture import AudioCapture
-from .transcribe import TranscriptionWorker, TranscriptionResult
-from .hotkeys import HotkeyManager
-from .output import type_text
+from .config import DEFAULT_CONFIG, apply_cli_overrides, ensure_logging_dir, load_config
+from .controller import VoiceRuntimeController
+from .runtime_types import AudioFrame, RecognitionEvent, TranscriptionResult
 
 __all__ = [
+    "AudioFrame",
     "DEFAULT_CONFIG",
+    "RecognitionEvent",
+    "TranscriptionResult",
+    "VoiceRuntimeController",
+    "apply_cli_overrides",
     "ensure_logging_dir",
     "load_config",
-    "AudioCapture",
-    "TranscriptionWorker",
-    "TranscriptionResult",
-    "HotkeyManager",
-    "type_text",
 ]
-
-
-

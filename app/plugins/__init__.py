@@ -1,1 +1,1 @@
-"""Optional plugin hooks for speak-keyboard."""
+"""Optional plugin hooks for the streaming voice runtime."""
