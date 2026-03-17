@@ -4,7 +4,7 @@ import json
 import tempfile
 import unittest
 
-from app.config import DEFAULT_CONFIG, apply_cli_overrides, load_config
+from app.config import DEFAULT_CONFIG, apply_cli_overrides, load_config, resolve_hotkey_mode
 
 
 class ConfigTests(unittest.TestCase):
@@ -35,6 +35,14 @@ class ConfigTests(unittest.TestCase):
         config = apply_cli_overrides(DEFAULT_CONFIG, mode="subtitles")
         self.assertEqual(config["mode"], "subtitles")
         self.assertEqual(config["output"]["sinks"], ["console_subtitles", "overlay_subtitles"])
+
+    def test_auto_hotkey_mode_prefers_push_to_talk_for_dictation(self) -> None:
+        config = load_config()
+        self.assertEqual(resolve_hotkey_mode(config), "push_to_talk")
+
+    def test_auto_hotkey_mode_prefers_toggle_for_subtitles(self) -> None:
+        config = apply_cli_overrides(DEFAULT_CONFIG, mode="subtitles")
+        self.assertEqual(resolve_hotkey_mode(config), "toggle")
 
 
 if __name__ == "__main__":

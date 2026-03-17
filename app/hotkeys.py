@@ -33,9 +33,32 @@ class HotkeyManager:
         self._registrations = []
 
     def register_toggle(self, combo: str, callback: Callable[[], None]) -> None:
+        required_keys = {_normalize_key_name(part.strip()) for part in combo.split("+") if part.strip()}
+        if not required_keys:
+            raise ValueError("toggle combo must contain at least one key")
+
+        state = {"pressed": set(), "active": False}
+
+        def handler(event) -> None:
+            key_name = _normalize_key_name(event.name)
+            if key_name not in required_keys:
+                return
+
+            if event.event_type == "down":
+                state["pressed"].add(key_name)
+                if not state["active"] and required_keys.issubset(state["pressed"]):
+                    state["active"] = True
+                return
+
+            was_active = state["active"]
+            state["pressed"].discard(key_name)
+            if was_active and not required_keys.issubset(state["pressed"]):
+                state["active"] = False
+                callback()
+
         with self._lock:
-            hotkey_id = keyboard.add_hotkey(combo, callback)
-            self._registrations.append(("hotkey", hotkey_id))
+            hook = keyboard.hook(handler)
+            self._registrations.append(("hook", hook))
             logger.info("Registered toggle hotkey %s", combo)
 
     def register_push_to_talk(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import queue
 import threading
@@ -12,6 +13,53 @@ from .runtime_types import OutputSink, RecognitionEvent
 
 
 logger = logging.getLogger(__name__)
+
+_BASE_SCREEN_WIDTH = 1920
+_BASE_SCREEN_HEIGHT = 1080
+_BASE_OVERLAY_FONT_SIZE = 20
+_BASE_OVERLAY_PADDING = 16
+
+
+def _enable_dpi_awareness() -> None:
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        return
+    except Exception:
+        logger.debug("Per-monitor DPI awareness unavailable", exc_info=True)
+
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        logger.debug("System DPI awareness unavailable", exc_info=True)
+
+
+def _resolve_overlay_layout(
+    screen_width: int,
+    screen_height: int,
+    width: int,
+    height: int,
+    x: int,
+    y: int,
+    auto_scale: bool,
+) -> dict[str, int]:
+    scale = 1.0
+    if auto_scale:
+        scale = max(1.0, min(screen_width / _BASE_SCREEN_WIDTH, screen_height / _BASE_SCREEN_HEIGHT))
+
+    resolved_width = max(480, int(round(width * scale)))
+    resolved_height = max(120, int(round(height * scale)))
+    resolved_x = max(0, int(round(x * scale)))
+    resolved_y = max(0, int(round(y * scale)))
+    padding = max(_BASE_OVERLAY_PADDING, int(round(_BASE_OVERLAY_PADDING * scale)))
+    return {
+        "width": resolved_width,
+        "height": resolved_height,
+        "x": resolved_x,
+        "y": resolved_y,
+        "font_size": max(_BASE_OVERLAY_FONT_SIZE, int(round(_BASE_OVERLAY_FONT_SIZE * scale))),
+        "padding": padding,
+        "wraplength": max(200, resolved_width - padding * 2),
+    }
 
 
 class TypeTextSink(OutputSink):
@@ -56,6 +104,7 @@ class OverlaySubtitleSink(OutputSink):
         y: int = 120,
         opacity: float = 0.85,
         linger_ms: int = 2500,
+        auto_scale: bool = True,
     ) -> None:
         self.enabled = enabled
         self.width = width
@@ -64,6 +113,7 @@ class OverlaySubtitleSink(OutputSink):
         self.y = y
         self.opacity = opacity
         self.linger_ms = linger_ms
+        self.auto_scale = auto_scale
         self._messages: "queue.Queue[tuple[str, bool] | None]" = queue.Queue()
         self._thread: Optional[threading.Thread] = None
         self._started = threading.Event()
@@ -88,6 +138,7 @@ class OverlaySubtitleSink(OutputSink):
             self._thread.join(timeout=2.0)
 
     def _ui_loop(self) -> None:
+        _enable_dpi_awareness()
         try:
             import tkinter as tk
         except ImportError:
@@ -100,23 +151,36 @@ class OverlaySubtitleSink(OutputSink):
         root.overrideredirect(True)
         root.attributes("-topmost", True)
         try:
+            root.tk.call("tk", "scaling", max(1.0, root.winfo_fpixels("1i") / 72.0))
+        except Exception:
+            logger.debug("Tk scaling unavailable", exc_info=True)
+        try:
             root.attributes("-alpha", self.opacity)
         except Exception:
             logger.debug("Alpha transparency not supported by current Tk build")
         root.configure(bg="#111111")
-        root.geometry(f"{self.width}x{self.height}+{self.x}+{self.y}")
+        layout = _resolve_overlay_layout(
+            root.winfo_screenwidth(),
+            root.winfo_screenheight(),
+            self.width,
+            self.height,
+            self.x,
+            self.y,
+            self.auto_scale,
+        )
+        root.geometry(f"{layout['width']}x{layout['height']}+{layout['x']}+{layout['y']}")
 
         label = tk.Label(
             root,
             text="",
             fg="#F6F2E8",
             bg="#111111",
-            font=("Segoe UI", 20, "bold"),
-            wraplength=self.width - 32,
+            font=("Segoe UI", layout["font_size"], "bold"),
+            wraplength=layout["wraplength"],
             justify="left",
             anchor="w",
-            padx=16,
-            pady=16,
+            padx=layout["padding"],
+            pady=layout["padding"],
         )
         label.pack(fill="both", expand=True)
 
@@ -185,6 +249,7 @@ def create_output_sinks(config: dict) -> list[OutputSink]:
                 y=int(overlay_cfg.get("y", 120)),
                 opacity=float(overlay_cfg.get("opacity", 0.85)),
                 linger_ms=int(overlay_cfg.get("linger_ms", 2500)),
+                auto_scale=bool(overlay_cfg.get("auto_scale", True)),
             )
         )
 

@@ -10,7 +10,14 @@ import time
 
 import keyboard
 
-from app import TranscriptionResult, VoiceRuntimeController, apply_cli_overrides, ensure_logging_dir, load_config
+from app import (
+    TranscriptionResult,
+    VoiceRuntimeController,
+    apply_cli_overrides,
+    ensure_logging_dir,
+    load_config,
+    resolve_hotkey_mode,
+)
 from app.hotkeys import HotkeyManager
 from app.logging_config import setup_logging
 from app.plugins.dataset_recorder import wrap_result_handler
@@ -54,7 +61,7 @@ def main() -> None:
         controller.on_result = wrap_result_handler(controller.on_result, controller, args.dataset_dir)
 
     hotkeys = HotkeyManager()
-    hotkey_mode = config["hotkeys"].get("mode", "toggle").lower()
+    hotkey_mode = resolve_hotkey_mode(config)
 
     try:
         if hotkey_mode == "push_to_talk":

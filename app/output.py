@@ -94,18 +94,23 @@ def type_text(text: str, append_newline: bool = False, method: str = "auto") -> 
     if method == "type":
         order = ["type", "clipboard", "unicode"]
     elif method == "clipboard":
-        order = ["clipboard", "type", "unicode"]
+        order = ["clipboard", "unicode", "type"]
     elif method == "unicode":
-        order = ["unicode"]
+        order = ["unicode", "clipboard", "type"]
     else:
-        order = ["type", "clipboard", "unicode"]
+        # Prefer paste/unicode on Windows for Cyrillic text. keyboard.write() can
+        # return without error while still failing to deliver visible text.
+        order = ["clipboard", "unicode", "type"]
 
     for mode in order:
         if mode == "type" and _type_with_keyboard(payload):
+            logger.info("文本注入成功: mode=type length=%s", len(payload))
             return
         if mode == "clipboard" and _try_clipboard_injection(payload):
+            logger.info("文本注入成功: mode=clipboard length=%s", len(payload))
             return
         if mode == "unicode" and _type_with_unicode(payload):
+            logger.info("文本注入成功: mode=unicode length=%s", len(payload))
             return
 
     logger.error("所有文本注入方式均失败: %s", payload)

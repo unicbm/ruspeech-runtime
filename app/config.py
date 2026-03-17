@@ -19,9 +19,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "frame_ms": 20,
     },
     "hotkeys": {
-        "mode": "toggle",
+        "mode": "auto",
         "toggle": "f2",
-        "push_to_talk": "f4",
+        "push_to_talk": "f2",
     },
     "asr": {
         "backend": "sherpa-onnx",
@@ -53,6 +53,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "overlay": {
         "enabled": True,
+        "auto_scale": True,
         "width": 960,
         "height": 180,
         "x": 120,
@@ -89,7 +90,7 @@ def _normalize_legacy_config(raw: Dict[str, Any]) -> Dict[str, Any]:
 
     hotkeys = config.setdefault("hotkeys", {})
     if "mode" not in hotkeys:
-        hotkeys["mode"] = "toggle"
+        hotkeys["mode"] = DEFAULT_CONFIG["hotkeys"]["mode"]
     hotkeys.setdefault("toggle", DEFAULT_CONFIG["hotkeys"]["toggle"])
     hotkeys.setdefault("push_to_talk", DEFAULT_CONFIG["hotkeys"]["push_to_talk"])
 
@@ -159,6 +160,14 @@ def apply_cli_overrides(
     if backend:
         merged["asr"]["backend"] = backend
     return merged
+
+
+def resolve_hotkey_mode(config: Dict[str, Any]) -> str:
+    hotkeys = config.get("hotkeys", {})
+    requested = str(hotkeys.get("mode", DEFAULT_CONFIG["hotkeys"]["mode"])).lower()
+    if requested == "auto":
+        return "push_to_talk" if str(config.get("mode", "dictation")).lower() == "dictation" else "toggle"
+    return "push_to_talk" if requested == "push_to_talk" else "toggle"
 
 
 def ensure_logging_dir(config: Dict[str, Any]) -> str:
