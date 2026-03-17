@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import logging
 import os
 import time
@@ -10,6 +9,7 @@ from typing import Optional
 
 import numpy as np
 
+from .config import resolve_runtime_path
 from .runtime_types import ASRBackend, RecognitionEvent
 
 
@@ -48,28 +48,61 @@ class SherpaOnnxBackend(ASRBackend):
                 "sherpa-onnx is required for the default Russian backend"
             ) from exc
 
-        recognizer_kwargs = self._build_recognizer_kwargs()
-        ctor = sherpa_onnx.OnlineRecognizer
-        valid_params = set(inspect.signature(ctor).parameters)
-        filtered_kwargs = {
-            key: value
-            for key, value in recognizer_kwargs.items()
-            if value is not None and key in valid_params
+        model_paths = self._resolve_model_paths()
+        tokens = model_paths["tokens"]
+        if not tokens:
+            raise BackendInitializationError("Missing sherpa-onnx tokens.txt path")
+
+        provider = self.asr_cfg.get("provider", "cpu")
+        num_threads = int(self.asr_cfg.get("num_threads", 2))
+        common_kwargs = {
+            "tokens": tokens,
+            "num_threads": num_threads,
+            "sample_rate": self.sample_rate,
+            "feature_dim": int(self.sherpa_cfg.get("feature_dim", 80)),
+            "enable_endpoint_detection": self.enable_endpoint_detection,
+            "rule1_min_trailing_silence": float(self.asr_cfg.get("rule1_min_trailing_silence", 1.2)),
+            "rule2_min_trailing_silence": float(self.asr_cfg.get("rule2_min_trailing_silence", 0.8)),
+            "rule3_min_utterance_length": float(self.asr_cfg.get("rule3_min_utterance_length", 20.0)),
+            "decoding_method": self.sherpa_cfg.get("decoding_method", "greedy_search"),
+            "provider": provider,
         }
-        missing_required = [key for key in ("tokens", "sample_rate") if key not in filtered_kwargs]
-        if missing_required:
-            raise BackendInitializationError(
-                f"Missing sherpa-onnx configuration keys: {', '.join(missing_required)}"
-            )
-        has_transducer = all(filtered_kwargs.get(name) for name in ("encoder", "decoder", "joiner"))
-        has_single_model = any(filtered_kwargs.get(name) for name in ("model", "paraformer"))
-        if not has_transducer and not has_single_model:
-            raise BackendInitializationError(
-                "Sherpa-ONNX config must provide either encoder/decoder/joiner or a single model/paraformer file"
-            )
+
+        variant = str(self.sherpa_cfg.get("variant", "")).lower()
 
         try:
-            self._recognizer = ctor(**filtered_kwargs)
+            if variant == "t-one-ctc" or (model_paths["model"] and not model_paths["encoder"]):
+                if not model_paths["model"]:
+                    raise BackendInitializationError("Missing model.onnx for sherpa t-one CTC backend")
+                self._recognizer = sherpa_onnx.OnlineRecognizer.from_t_one_ctc(
+                    model=model_paths["model"],
+                    **common_kwargs,
+                )
+            elif model_paths["paraformer"] and model_paths["encoder"]:
+                self._recognizer = sherpa_onnx.OnlineRecognizer.from_paraformer(
+                    encoder=model_paths["encoder"],
+                    decoder=model_paths["paraformer"],
+                    **common_kwargs,
+                )
+            elif all(model_paths[name] for name in ("encoder", "decoder", "joiner")):
+                self._recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+                    encoder=model_paths["encoder"],
+                    decoder=model_paths["decoder"],
+                    joiner=model_paths["joiner"],
+                    model_type=self.sherpa_cfg.get("model_type", ""),
+                    **common_kwargs,
+                )
+            elif model_paths["model"]:
+                self._recognizer = sherpa_onnx.OnlineRecognizer.from_zipformer2_ctc(
+                    model=model_paths["model"],
+                    **common_kwargs,
+                )
+            else:
+                raise BackendInitializationError(
+                    "Sherpa-ONNX config must provide either model.onnx or encoder/decoder/joiner files"
+                )
+        except BackendInitializationError:
+            raise
         except Exception as exc:
             raise BackendInitializationError(f"Unable to initialize sherpa-onnx: {exc}") from exc
 
@@ -146,9 +179,9 @@ class SherpaOnnxBackend(ASRBackend):
         self._stream = None
         self._recognizer = None
 
-    def _build_recognizer_kwargs(self) -> dict:
+    def _resolve_model_paths(self) -> dict:
         model_dir = self.sherpa_cfg.get("model_dir")
-        resolved = {
+        return {
             "tokens": self._resolve_path(self.sherpa_cfg.get("tokens"), model_dir, "tokens.txt"),
             "encoder": self._resolve_path(self.sherpa_cfg.get("encoder"), model_dir, "encoder.onnx"),
             "decoder": self._resolve_path(self.sherpa_cfg.get("decoder"), model_dir, "decoder.onnx"),
@@ -159,25 +192,15 @@ class SherpaOnnxBackend(ASRBackend):
             )
             or self._resolve_path(self.sherpa_cfg.get("paraformer"), model_dir, "model.onnx"),
         }
-        return {
-            **resolved,
-            "sample_rate": self.sample_rate,
-            "feature_dim": int(self.sherpa_cfg.get("feature_dim", 80)),
-            "provider": self.asr_cfg.get("provider", "cpu"),
-            "num_threads": int(self.asr_cfg.get("num_threads", 2)),
-            "decoding_method": self.sherpa_cfg.get("decoding_method", "greedy_search"),
-            "enable_endpoint_detection": self.enable_endpoint_detection,
-            "rule1_min_trailing_silence": float(self.asr_cfg.get("rule1_min_trailing_silence", 1.2)),
-            "rule2_min_trailing_silence": float(self.asr_cfg.get("rule2_min_trailing_silence", 0.8)),
-            "rule3_min_utterance_length": float(self.asr_cfg.get("rule3_min_utterance_length", 20.0)),
-        }
 
     def _resolve_path(self, explicit: Optional[str], model_dir: Optional[str], filename: str) -> Optional[str]:
         if explicit:
-            return explicit
+            explicit_path = resolve_runtime_path(explicit)
+            return explicit_path if explicit_path and os.path.exists(explicit_path) else explicit_path
         if not model_dir:
             return None
-        candidate = os.path.join(model_dir, filename)
+        base_dir = resolve_runtime_path(model_dir) or model_dir
+        candidate = os.path.join(base_dir, filename)
         return candidate if os.path.exists(candidate) else None
 
     def _decode_ready(self) -> None:

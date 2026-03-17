@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import sys
 from typing import Any, Dict, Optional
 
 
@@ -13,7 +14,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "source": {
         "type": "microphone",
         "device": None,
-        "sample_rate": 16000,
+        "sample_rate": 8000,
         "channels": 1,
         "frame_ms": 20,
     },
@@ -39,6 +40,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "joiner": None,
             "model": None,
             "paraformer": None,
+            "variant": "t-one-ctc",
             "feature_dim": 80,
             "decoding_method": "greedy_search",
         },
@@ -161,9 +163,22 @@ def apply_cli_overrides(
 
 def ensure_logging_dir(config: Dict[str, Any]) -> str:
     log_dir = config["logging"].get("dir", "logs")
-    if not os.path.isabs(log_dir):
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        log_dir = os.path.join(project_root, log_dir)
+    log_dir = resolve_runtime_path(log_dir)
 
     os.makedirs(log_dir, exist_ok=True)
     return log_dir
+
+
+def get_app_root() -> str:
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def resolve_runtime_path(path: Optional[str]) -> Optional[str]:
+    if not path:
+        return path
+    expanded = os.path.expanduser(path)
+    if os.path.isabs(expanded):
+        return expanded
+    return os.path.join(get_app_root(), expanded)

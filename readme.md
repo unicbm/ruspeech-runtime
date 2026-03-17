@@ -82,6 +82,12 @@ app/
 - `soundcard`
 - `sherpa-onnx`
 
+旧 FunASR 兼容依赖被拆到了：
+
+```text
+requirements-legacy-funasr.txt
+```
+
 安装：
 
 ```bash
@@ -92,6 +98,12 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+如果你不想手动装环境，可以直接双击：
+
+```text
+setup_runtime.bat
+```
+
 ## 模型准备
 
 默认后端是 `sherpa-onnx`，配置默认指向：
@@ -100,18 +112,15 @@ pip install -r requirements.txt
 models/sherpa-onnx-ru-streaming
 ```
 
-你需要自行把俄语 streaming 模型放到该目录，或者在配置里显式指定这些文件：
-- `tokens.txt`
-- `encoder.onnx`
-- `decoder.onnx`
-- `joiner.onnx`
+当前默认使用官方俄语 streaming 模型 `sherpa-onnx-streaming-t-one-russian-2025-09-08`。
 
-如果你使用的是单文件模型，也可以配置：
-- `model.onnx`
-或
-- `paraformer`
+如果你已经运行过：
 
-当前仓库还没有内置模型下载器。
+```text
+setup_runtime.bat
+```
+
+模型会自动下载到默认目录，不需要手动处理。
 
 ## 启动
 
@@ -121,12 +130,40 @@ models/sherpa-onnx-ru-streaming
 python main.py
 ```
 
+双击启动：
+
+```text
+run_dictation.bat
+```
+
 切换模式或输入源：
 
 ```bash
 python main.py --mode subtitles --source loopback
 python main.py --mode dictation --source microphone
 ```
+
+双击字幕模式：
+
+```text
+run_subtitles.bat
+```
+
+## EXE 打包
+
+仓库里已经提供了打包脚本：
+
+```text
+build_exe.bat
+```
+
+运行后会生成：
+
+```text
+dist\RuspeechRuntime\RuspeechRuntime.exe
+```
+
+这个 one-folder 包会把默认俄语模型一起带进 `dist` 目录。
 
 覆盖后端：
 
@@ -156,7 +193,7 @@ python main.py --save-dataset --dataset-dir dataset
   "source": {
     "type": "microphone",
     "device": null,
-    "sample_rate": 16000,
+    "sample_rate": 8000,
     "channels": 1,
     "frame_ms": 20
   },
@@ -182,7 +219,7 @@ python main.py --save-dataset --dataset-dir dataset
   "mode": "subtitles",
   "source": {
     "type": "loopback",
-    "sample_rate": 16000,
+    "sample_rate": 8000,
     "channels": 2,
     "frame_ms": 20
   },

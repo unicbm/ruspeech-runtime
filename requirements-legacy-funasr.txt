@@ -1,0 +1,5 @@
+librosa==0.11.0
+soundfile==0.13.1
+funasr_onnx==0.4.1
+jieba==0.42.1
+modelscope==1.30.0
