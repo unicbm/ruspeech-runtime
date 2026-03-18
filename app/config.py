@@ -8,13 +8,19 @@ import os
 import sys
 from typing import Any, Dict, Optional
 
+SUPPORTED_MODES = {"dictation", "subtitles"}
+SUPPORTED_SOURCES = {"microphone", "loopback"}
+SUPPORTED_BACKENDS = {"sherpa-onnx"}
+RESERVED_BACKENDS = {"vosk", "qwen3-asr", "qwen"}
+SUPPORTED_SINKS = {"type_text", "console_subtitles", "overlay_subtitles"}
+
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "mode": "dictation",
     "source": {
         "type": "microphone",
         "device": None,
-        "sample_rate": 8000,
+        "sample_rate": 16000,
         "channels": 1,
         "frame_ms": 20,
     },
@@ -41,6 +47,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "model": None,
             "paraformer": None,
             "variant": "t-one-ctc",
+            "sample_rate": 8000,
             "feature_dim": 80,
             "decoding_method": "greedy_search",
         },
@@ -131,7 +138,7 @@ def _normalize_legacy_config(raw: Dict[str, Any]) -> Dict[str, Any]:
 def load_config(path: Optional[str] = None) -> Dict[str, Any]:
     config = copy.deepcopy(DEFAULT_CONFIG)
     if not path:
-        return config
+        return validate_config(config)
 
     expanded_path = os.path.expanduser(path)
     if not os.path.exists(expanded_path):
@@ -141,7 +148,7 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
         overrides = json.load(file)
 
     normalized = _normalize_legacy_config(overrides)
-    return _merge_dict(config, normalized)
+    return validate_config(_merge_dict(config, normalized))
 
 
 def apply_cli_overrides(
@@ -152,14 +159,19 @@ def apply_cli_overrides(
 ) -> Dict[str, Any]:
     merged = copy.deepcopy(config)
     if mode:
-        merged["mode"] = mode
-        if mode == "subtitles" and merged["output"].get("sinks") == ["type_text"]:
+        merged["mode"] = str(mode).lower()
+        if merged["mode"] == "subtitles" and merged["output"].get("sinks") == ["type_text"]:
             merged["output"]["sinks"] = ["console_subtitles", "overlay_subtitles"]
+        elif merged["mode"] == "dictation" and merged["output"].get("sinks") == [
+            "console_subtitles",
+            "overlay_subtitles",
+        ]:
+            merged["output"]["sinks"] = ["type_text"]
     if source:
-        merged["source"]["type"] = source
+        merged["source"]["type"] = str(source).lower()
     if backend:
-        merged["asr"]["backend"] = backend
-    return merged
+        merged["asr"]["backend"] = str(backend).lower()
+    return validate_config(merged)
 
 
 def resolve_hotkey_mode(config: Dict[str, Any]) -> str:
@@ -204,3 +216,86 @@ def resolve_runtime_path(path: Optional[str]) -> Optional[str]:
     if os.path.isabs(expanded):
         return expanded
     return os.path.join(get_resource_root(), expanded)
+
+
+def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    validated = copy.deepcopy(config)
+
+    mode = str(validated.get("mode", DEFAULT_CONFIG["mode"])).lower()
+    if mode not in SUPPORTED_MODES:
+        raise ValueError(f"Unsupported runtime mode: {mode}")
+    validated["mode"] = mode
+
+    source_cfg = validated.setdefault("source", copy.deepcopy(DEFAULT_CONFIG["source"]))
+    source_type = str(source_cfg.get("type", DEFAULT_CONFIG["source"]["type"])).lower()
+    if source_type not in SUPPORTED_SOURCES:
+        raise ValueError(f"Unsupported audio source: {source_type}")
+    source_cfg["type"] = source_type
+    source_cfg["sample_rate"] = _require_positive_int(source_cfg.get("sample_rate"), "source.sample_rate")
+    source_cfg["frame_ms"] = _require_positive_int(source_cfg.get("frame_ms"), "source.frame_ms")
+    source_cfg["channels"] = _require_positive_int(source_cfg.get("channels", 1), "source.channels")
+
+    asr_cfg = validated.setdefault("asr", copy.deepcopy(DEFAULT_CONFIG["asr"]))
+    backend_name = str(asr_cfg.get("backend", DEFAULT_CONFIG["asr"]["backend"])).lower()
+    if backend_name in RESERVED_BACKENDS:
+        raise ValueError(f"ASR backend '{backend_name}' is declared but not implemented")
+    if backend_name not in SUPPORTED_BACKENDS:
+        raise ValueError(f"Unsupported ASR backend: {backend_name}")
+    asr_cfg["backend"] = backend_name
+    asr_cfg["num_threads"] = _require_positive_int(asr_cfg.get("num_threads", 2), "asr.num_threads")
+
+    sherpa_cfg = asr_cfg.setdefault("sherpa", copy.deepcopy(DEFAULT_CONFIG["asr"]["sherpa"]))
+    sherpa_cfg["sample_rate"] = _require_positive_int(
+        sherpa_cfg.get("sample_rate", source_cfg["sample_rate"]),
+        "asr.sherpa.sample_rate",
+    )
+    sherpa_cfg["feature_dim"] = _require_positive_int(
+        sherpa_cfg.get("feature_dim", DEFAULT_CONFIG["asr"]["sherpa"]["feature_dim"]),
+        "asr.sherpa.feature_dim",
+    )
+    _validate_optional_paths(
+        {
+            "asr.sherpa.model_dir": sherpa_cfg.get("model_dir"),
+            "asr.sherpa.tokens": sherpa_cfg.get("tokens"),
+            "asr.sherpa.encoder": sherpa_cfg.get("encoder"),
+            "asr.sherpa.decoder": sherpa_cfg.get("decoder"),
+            "asr.sherpa.joiner": sherpa_cfg.get("joiner"),
+            "asr.sherpa.model": sherpa_cfg.get("model"),
+            "asr.sherpa.paraformer": sherpa_cfg.get("paraformer"),
+        }
+    )
+
+    output_cfg = validated.setdefault("output", copy.deepcopy(DEFAULT_CONFIG["output"]))
+    sinks = [str(item).lower() for item in output_cfg.get("sinks", [])]
+    if not sinks:
+        raise ValueError("output.sinks must contain at least one sink")
+    invalid_sinks = [name for name in sinks if name not in SUPPORTED_SINKS]
+    if invalid_sinks:
+        raise ValueError(f"Unsupported output sinks: {', '.join(invalid_sinks)}")
+    output_cfg["sinks"] = sinks
+
+    if mode == "dictation" and "type_text" not in sinks:
+        raise ValueError("dictation mode requires the 'type_text' sink")
+    if mode == "subtitles" and not {"console_subtitles", "overlay_subtitles"}.intersection(sinks):
+        raise ValueError("subtitles mode requires at least one subtitle sink")
+
+    return validated
+
+
+def _require_positive_int(value: Any, field_name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a positive integer") from exc
+    if parsed <= 0:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return parsed
+
+
+def _validate_optional_paths(paths: Dict[str, Any]) -> None:
+    for field_name, value in paths.items():
+        if not value:
+            continue
+        resolved = resolve_runtime_path(str(value))
+        if resolved and not os.path.exists(resolved):
+            raise FileNotFoundError(f"{field_name} does not exist: {resolved}")

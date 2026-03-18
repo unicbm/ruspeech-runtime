@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.output_sinks import _resolve_overlay_layout
+from app.output_sinks import OverlaySubtitleSink, _OVERLAY_QUEUE_SIZE, _resolve_overlay_layout
 
 
 class OverlayLayoutTests(unittest.TestCase):
@@ -19,6 +19,26 @@ class OverlayLayoutTests(unittest.TestCase):
         self.assertEqual(layout["height"], 180)
         self.assertEqual(layout["font_size"], 20)
         self.assertEqual(layout["padding"], 16)
+
+    def test_overlay_partial_updates_stay_bounded(self) -> None:
+        sink = OverlaySubtitleSink(enabled=False)
+
+        for index in range(_OVERLAY_QUEUE_SIZE + 10):
+            sink._replace_partial(f"partial-{index}")
+
+        self.assertEqual(sink._messages.qsize(), 1)
+        self.assertEqual(sink._messages.get_nowait(), (f"partial-{_OVERLAY_QUEUE_SIZE + 9}", False))
+
+    def test_overlay_final_keeps_latest_partial_and_all_finals(self) -> None:
+        sink = OverlaySubtitleSink(enabled=False)
+
+        for index in range(_OVERLAY_QUEUE_SIZE):
+            sink._replace_partial(f"partial-{index}")
+        sink._enqueue_final("final-text")
+
+        queued = list(sink._messages.queue)
+        self.assertIn(("final-text", True), queued)
+        self.assertLessEqual(len(queued), _OVERLAY_QUEUE_SIZE)
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ _BASE_SCREEN_WIDTH = 1920
 _BASE_SCREEN_HEIGHT = 1080
 _BASE_OVERLAY_FONT_SIZE = 20
 _BASE_OVERLAY_PADDING = 16
+_OVERLAY_QUEUE_SIZE = 32
 
 
 def _enable_dpi_awareness() -> None:
@@ -114,7 +115,7 @@ class OverlaySubtitleSink(OutputSink):
         self.opacity = opacity
         self.linger_ms = linger_ms
         self.auto_scale = auto_scale
-        self._messages: "queue.Queue[tuple[str, bool] | None]" = queue.Queue()
+        self._messages: "queue.Queue[tuple[str, bool] | None]" = queue.Queue(maxsize=_OVERLAY_QUEUE_SIZE)
         self._thread: Optional[threading.Thread] = None
         self._started = threading.Event()
         if self.enabled:
@@ -125,15 +126,19 @@ class OverlaySubtitleSink(OutputSink):
     def handle_event(self, event: RecognitionEvent) -> None:
         if not self.enabled or not event.text:
             return
-        try:
-            self._messages.put_nowait((event.text, event.is_final))
-        except queue.Full:
-            logger.warning("Overlay queue is full, dropping subtitle update")
+        if event.is_final:
+            self._enqueue_final(event.text)
+            return
+        self._replace_partial(event.text)
 
     def close(self) -> None:
         if not self.enabled:
             return
-        self._messages.put(None)
+        with self._messages.mutex:
+            while self._messages.maxsize and len(self._messages.queue) >= self._messages.maxsize:
+                self._messages.queue.popleft()
+            self._messages.queue.append(None)
+            self._messages.not_empty.notify()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
 
@@ -216,6 +221,40 @@ class OverlaySubtitleSink(OutputSink):
         root.withdraw()
         root.after(50, poll_queue)
         root.mainloop()
+
+    def _enqueue_final(self, text: str) -> None:
+        while True:
+            try:
+                self._messages.put((text, True), timeout=0.1)
+                return
+            except queue.Full:
+                if not self._drop_partial_message():
+                    logger.warning("Overlay queue is full of final messages; waiting to enqueue latest final")
+
+    def _replace_partial(self, text: str) -> None:
+        if self._drop_partial_message():
+            try:
+                self._messages.put_nowait((text, False))
+                return
+            except queue.Full:
+                pass
+
+        try:
+            self._messages.put_nowait((text, False))
+        except queue.Full:
+            logger.debug("Overlay queue full, dropping stale partial subtitle")
+
+    def _drop_partial_message(self) -> bool:
+        with self._messages.mutex:
+            for item in list(self._messages.queue):
+                if item is None:
+                    continue
+                _, is_final = item
+                if not is_final:
+                    self._messages.queue.remove(item)
+                    self._messages.not_full.notify()
+                    return True
+        return False
 
 
 def create_output_sinks(config: dict) -> list[OutputSink]:

@@ -37,10 +37,19 @@ class QueuedAudioSource(AudioSource):
         self._queue: "queue.Queue[AudioFrame]" = queue.Queue(maxsize=queue_size)
         self._lock = threading.Lock()
         self._running = threading.Event()
+        self._last_error: Optional[str] = None
 
     @property
     def sample_rate(self) -> int:
         return self._sample_rate
+
+    @property
+    def is_running(self) -> bool:
+        return self._running.is_set()
+
+    @property
+    def last_error(self) -> Optional[str]:
+        return self._last_error
 
     def read(self, timeout: float = 0.1) -> Optional[AudioFrame]:
         try:
@@ -90,9 +99,11 @@ class MicrophoneSource(QueuedAudioSource):
             try:
                 import sounddevice as sd
             except ImportError as exc:
+                self._last_error = str(exc)
                 raise AudioSourceError("sounddevice is required for microphone capture") from exc
 
             self.flush()
+            self._last_error = None
             try:
                 self._stream = sd.InputStream(
                     samplerate=self.sample_rate,
@@ -104,6 +115,7 @@ class MicrophoneSource(QueuedAudioSource):
                 )
                 self._stream.start()
             except Exception as exc:
+                self._last_error = str(exc)
                 raise AudioSourceError(f"Unable to start microphone capture: {exc}") from exc
 
             self._running.set()
@@ -162,9 +174,11 @@ class WasapiLoopbackSource(QueuedAudioSource):
             try:
                 import soundcard as sc
             except ImportError as exc:
+                self._last_error = str(exc)
                 raise AudioSourceError("soundcard is required for WASAPI loopback capture") from exc
 
             self.flush()
+            self._last_error = None
             self._microphone = self._resolve_loopback_device(sc)
             self._running.set()
             self._thread = threading.Thread(target=self._capture_loop, daemon=True, name="LoopbackSource")
@@ -245,6 +259,7 @@ class WasapiLoopbackSource(QueuedAudioSource):
                         mono = frame.reshape(-1)
                     self._enqueue(mono.copy())
         except Exception as exc:
+            self._last_error = str(exc)
             logger.error("Loopback capture failed: %s", exc, exc_info=True)
             self._running.clear()
 

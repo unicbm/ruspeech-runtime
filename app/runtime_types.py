@@ -82,6 +82,14 @@ class AudioSource(ABC):
     def sample_rate(self) -> int:
         raise NotImplementedError
 
+    @property
+    def is_running(self) -> bool:
+        return False
+
+    @property
+    def last_error(self) -> Optional[str]:
+        return None
+
 
 class ASRBackend(ABC):
     @abstractmethod

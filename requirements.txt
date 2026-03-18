@@ -4,3 +4,4 @@ soundcard>=0.4,<0.5
 keyboard==0.13.5
 pyperclip==1.11.0
 sherpa-onnx>=1.12,<2
+pyinstaller>=6,<7

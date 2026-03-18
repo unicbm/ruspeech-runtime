@@ -12,9 +12,18 @@ call .venv\Scripts\python.exe -m pip install --upgrade pip
 call .venv\Scripts\python.exe -m pip install -r requirements.txt
 if errorlevel 1 goto :fail
 
-echo Downloading Russian streaming model...
-powershell -ExecutionPolicy Bypass -File scripts\download_russian_model.ps1
-if errorlevel 1 goto :fail
+if exist "models\sherpa-onnx-ru-streaming\model.onnx" (
+  echo Russian streaming model already present, skipping download.
+) else (
+  if not exist "scripts\download_russian_model.ps1" (
+    echo Model is missing and scripts\download_russian_model.ps1 was not found.
+    goto :fail
+  )
+
+  echo Downloading Russian streaming model...
+  powershell -ExecutionPolicy Bypass -File scripts\download_russian_model.ps1
+  if errorlevel 1 goto :fail
+)
 
 echo.
 echo Setup complete.

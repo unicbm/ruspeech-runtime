@@ -7,6 +7,7 @@ import logging
 import sys
 import threading
 import time
+from typing import Optional
 
 import keyboard
 
@@ -36,34 +37,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", help="Path to config JSON")
     parser.add_argument("--mode", choices=["dictation", "subtitles"], help="Override runtime mode")
     parser.add_argument("--source", choices=["microphone", "loopback"], help="Override audio source")
-    parser.add_argument("--backend", help="Override ASR backend")
+    parser.add_argument("--backend", choices=["sherpa-onnx"], help="Override ASR backend")
     parser.add_argument("--once", action="store_true", help="Run a single capture cycle for debugging")
     parser.add_argument("--save-dataset", action="store_true", help="Persist audio/text pairs")
     parser.add_argument("--dataset-dir", default="dataset", help="Dataset output directory")
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    config = apply_cli_overrides(
-        load_config(args.config),
-        mode=args.mode,
-        source=args.source,
-        backend=args.backend,
-    )
-
-    log_dir_abs = ensure_logging_dir(config)
-    setup_logging(level=config["logging"].get("level", "INFO"), log_dir=log_dir_abs)
-
-    controller = VoiceRuntimeController(config_path=args.config, config=config, on_result=None)
-    controller.on_result = _make_result_handler(controller)
-    if args.save_dataset:
-        controller.on_result = wrap_result_handler(controller.on_result, controller, args.dataset_dir)
-
-    hotkeys = HotkeyManager()
-    hotkey_mode = resolve_hotkey_mode(config)
-
+def main() -> int:
+    controller: Optional[VoiceRuntimeController] = None
+    hotkeys: Optional[HotkeyManager] = None
     try:
+        args = parse_args()
+        config = apply_cli_overrides(
+            load_config(args.config),
+            mode=args.mode,
+            source=args.source,
+            backend=args.backend,
+        )
+
+        log_dir_abs = ensure_logging_dir(config)
+        setup_logging(level=config["logging"].get("level", "INFO"), log_dir=log_dir_abs)
+
+        controller = VoiceRuntimeController(config_path=args.config, config=config, on_result=None)
+        controller.on_result = _make_result_handler(controller)
+        if args.save_dataset:
+            controller.on_result = wrap_result_handler(controller.on_result, controller, args.dataset_dir)
+
+        hotkeys = HotkeyManager()
+        hotkey_mode = resolve_hotkey_mode(config)
+
         if hotkey_mode == "push_to_talk":
             combo = config["hotkeys"].get("push_to_talk", "f4")
             hotkeys.register_push_to_talk(combo, controller.start, controller.stop)
@@ -79,12 +82,19 @@ def main() -> None:
             controller.stop()
         else:
             keyboard.wait()
+        return 0
     except KeyboardInterrupt:
         logger.info("Interrupted by user, exiting")
+        return 0
+    except Exception:
+        _log_startup_failure()
+        return 1
     finally:
-        controller.cleanup()
-        hotkeys.cleanup()
-        sys.exit(0)
+        cleanup_failed = False
+        cleanup_failed |= _safe_cleanup_controller(controller)
+        cleanup_failed |= _safe_cleanup_hotkeys(hotkeys)
+        if cleanup_failed:
+            logger.warning("Runtime cleanup completed with errors")
 
 
 def _make_result_handler(controller: VoiceRuntimeController):
@@ -120,5 +130,34 @@ def _toggle(controller: VoiceRuntimeController) -> None:
         controller.start()
 
 
+def _safe_cleanup_controller(controller: Optional[VoiceRuntimeController]) -> bool:
+    if controller is None:
+        return False
+    try:
+        controller.cleanup()
+        return False
+    except Exception:
+        logger.exception("Controller cleanup failed")
+        return True
+
+
+def _safe_cleanup_hotkeys(hotkeys: Optional[HotkeyManager]) -> bool:
+    if hotkeys is None:
+        return False
+    try:
+        hotkeys.cleanup()
+        return False
+    except Exception:
+        logger.exception("Hotkey cleanup failed")
+        return True
+
+
+def _log_startup_failure() -> None:
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(level=logging.ERROR)
+    logger.exception("Runtime failed")
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
