@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 import time
+import wave
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 
-from .config import resolve_runtime_path
+from .config import ensure_logging_dir, resolve_runtime_path
+from .funasr_server import FunASRServer
 from .runtime_types import ASRBackend, RecognitionEvent
 
 
@@ -41,6 +45,10 @@ class SherpaOnnxBackend(ASRBackend):
     def initialize(self) -> None:
         if self._recognizer is not None:
             return
+        if self.input_sample_rate != self.model_sample_rate:
+            raise BackendInitializationError(
+                "source.sample_rate and asr.sherpa.sample_rate must match until resampling is implemented"
+            )
 
         try:
             import sherpa_onnx
@@ -253,10 +261,137 @@ class SherpaOnnxBackend(ASRBackend):
         )
 
 
+class FunASRBackend(ASRBackend):
+    def __init__(self, config: dict) -> None:
+        self.config = config
+        self.asr_cfg = config["asr"]
+        self.funasr_cfg = self.asr_cfg.get("funasr", {})
+        self.input_sample_rate = int(config["source"]["sample_rate"])
+        self.language = self.funasr_cfg.get("language", self.asr_cfg.get("language", "zh"))
+        self._server: Optional[FunASRServer] = None
+        self._session_id = 0
+        self._source_kind = "microphone"
+        self._audio_seconds = 0.0
+        self._frames: list[np.ndarray] = []
+        self._log_dir = ensure_logging_dir(config)
+
+    def initialize(self) -> None:
+        if self._server is None:
+            self._server = FunASRServer()
+        result = self._server.initialize()
+        if not result.get("success", False):
+            raise BackendInitializationError(result.get("error", "FunASR initialization failed"))
+
+    def start_stream(self, session_id: int, source_kind: str, continuous_segments: bool) -> None:
+        self.initialize()
+        self._session_id = session_id
+        self._source_kind = source_kind
+        self._audio_seconds = 0.0
+        self._frames.clear()
+        if continuous_segments:
+            logger.debug("FunASR backend ignores continuous_segments and emits final text only")
+
+    def push_audio(self, samples: np.ndarray) -> list[RecognitionEvent]:
+        frame = np.asarray(samples, dtype=np.float32).reshape(-1)
+        if frame.size == 0:
+            return []
+        self._frames.append(frame.copy())
+        self._audio_seconds += frame.size / float(self.input_sample_rate)
+        return []
+
+    def finalize(self) -> list[RecognitionEvent]:
+        if not self._frames or self._server is None:
+            self._frames.clear()
+            return []
+
+        samples = np.concatenate(self._frames, axis=0)
+        self._frames.clear()
+        duration = samples.size / float(self.input_sample_rate) if samples.size else 0.0
+        temp_path = self._write_temp_wav(samples)
+        started_at = time.monotonic()
+        try:
+            result = self._server.transcribe_audio(temp_path, options=self._build_options())
+        finally:
+            latency_ms = (time.monotonic() - started_at) * 1000.0
+            try:
+                os.remove(temp_path)
+            except OSError:
+                logger.debug("Failed to remove temporary FunASR audio file: %s", temp_path)
+
+        if not result.get("success", False):
+            return [
+                RecognitionEvent(
+                    text="",
+                    raw_text="",
+                    is_final=True,
+                    source_kind=self._source_kind,
+                    session_id=self._session_id,
+                    duration=duration,
+                    latency_ms=latency_ms,
+                    language=self.language,
+                    confidence=0.0,
+                    error=result.get("error", "FunASR transcription failed"),
+                )
+            ]
+
+        final_text = str(result.get("text", "")).strip()
+        raw_text = str(result.get("raw_text", final_text)).strip()
+        if not final_text and not raw_text:
+            return []
+
+        return [
+            RecognitionEvent(
+                text=final_text,
+                raw_text=raw_text,
+                is_final=True,
+                source_kind=self._source_kind,
+                session_id=self._session_id,
+                duration=float(result.get("duration", duration)),
+                latency_ms=latency_ms,
+                language=str(result.get("language", self.language)),
+                confidence=float(result.get("confidence", 0.0)),
+            )
+        ]
+
+    def cleanup(self) -> None:
+        self._frames.clear()
+        if self._server is not None:
+            try:
+                self._server.cleanup()
+            finally:
+                self._server = None
+
+    def _build_options(self) -> dict:
+        return {
+            "batch_size_s": self.funasr_cfg.get("batch_size_s", 60),
+            "hotword": self.funasr_cfg.get("hotword", ""),
+            "use_vad": self.funasr_cfg.get("use_vad", True),
+            "use_punc": self.funasr_cfg.get("use_punc", True),
+            "language": self.funasr_cfg.get("language", self.language),
+        }
+
+    def _write_temp_wav(self, samples: np.ndarray) -> str:
+        pcm = np.clip(samples, -1.0, 1.0)
+        fd, temp_path = tempfile.mkstemp(
+            prefix=f"funasr-session-{self._session_id}-",
+            suffix=".wav",
+            dir=Path(self._log_dir),
+        )
+        os.close(fd)
+        with wave.open(temp_path, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(self.input_sample_rate)
+            wav_file.writeframes((pcm * 32767.0).astype(np.int16).tobytes())
+        return temp_path
+
+
 def create_asr_backend(config: dict) -> ASRBackend:
     backend_name = config["asr"].get("backend", "sherpa-onnx").lower()
     if backend_name == "sherpa-onnx":
         return SherpaOnnxBackend(config)
+    if backend_name == "funasr":
+        return FunASRBackend(config)
     if backend_name in {"vosk", "qwen3-asr", "qwen"}:
         raise NotImplementedError(
             f"Backend '{backend_name}' is reserved by the new architecture but not implemented yet"

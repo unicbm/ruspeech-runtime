@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import queue
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -135,6 +136,21 @@ class CaptureSink:
         return None
 
 
+class BlockingCaptureSink(CaptureSink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self._blocked = False
+
+    def handle_event(self, event: RecognitionEvent) -> None:
+        if not self._blocked and not event.is_final:
+            self._blocked = True
+            self.started.set()
+            self.release.wait(timeout=2.0)
+        super().handle_event(event)
+
+
 class ControllerTests(unittest.TestCase):
     def _make_controller(
         self,
@@ -142,6 +158,7 @@ class ControllerTests(unittest.TestCase):
         source: FakeSource | None = None,
         backend: FakeBackend | None = None,
         sink: CaptureSink | None = None,
+        on_state_change=None,
     ) -> tuple[VoiceRuntimeController, FakeSource, FakeBackend, CaptureSink]:
         config = copy.deepcopy(DEFAULT_CONFIG)
         config["logging"]["dir"] = "logs"
@@ -154,6 +171,7 @@ class ControllerTests(unittest.TestCase):
             backend=backend,
             sinks=[sink],
             on_result=None,
+            on_state_change=on_state_change,
         )
         self.addCleanup(controller.cleanup)
         return controller, source, backend, sink
@@ -257,6 +275,58 @@ class ControllerTests(unittest.TestCase):
 
         self.assertLessEqual(controller._recent_sample_count, sample_rate * 30)
         self.assertLessEqual(sum(chunk.size for chunk in controller._recent_frames), sample_rate * 30)
+
+    def test_stale_session_final_events_are_dropped_after_restart(self) -> None:
+        sink = BlockingCaptureSink()
+        controller, source, backend, _ = self._make_controller(sink=sink)
+        results = []
+        controller.on_result = results.append
+
+        with patch.object(controller, "_persist_recent_audio") as persist_recent_audio:
+            controller.start()
+            source.push(np.ones(320, dtype=np.float32))
+            self.assertTrue(sink.started.wait(timeout=1.0))
+
+            controller.stop()
+            controller.start()
+            source.push(np.ones(320, dtype=np.float32))
+            sink.release.set()
+
+            self._wait_for(lambda: len(backend.received) == 2)
+            self._wait_for(lambda: len(sink.events) >= 2)
+            controller.stop()
+            self._wait_for(lambda: len(results) == 1)
+
+        self.assertEqual([event.session_id for event in sink.events if event.is_final], [2])
+        self.assertEqual([result.session_id for result in results], [2])
+        self.assertEqual(persist_recent_audio.call_count, 2)
+
+    def test_stop_is_idempotent(self) -> None:
+        controller, _, backend, _ = self._make_controller()
+
+        with patch.object(controller, "_persist_recent_audio"):
+            controller.stop()
+            controller.start()
+            controller.stop()
+            controller.stop()
+
+        self.assertEqual(backend.finalize_calls, 1)
+        self.assertEqual(controller.state, VoiceRuntimeController.STATE_IDLE)
+
+    def test_state_change_callback_receives_transitions(self) -> None:
+        states = []
+        controller, source, _, _ = self._make_controller(on_state_change=lambda status: states.append(status.state))
+
+        with patch.object(controller, "_persist_recent_audio"):
+            controller.start()
+            source.push(np.ones(320, dtype=np.float32))
+            self._wait_for(lambda: "RUNNING" in states)
+            controller.stop()
+
+        self.assertIn("STARTING", states)
+        self.assertIn("RUNNING", states)
+        self.assertIn("STOPPING", states)
+        self.assertEqual(states[-1], "IDLE")
 
     def _wait_for(self, predicate, timeout: float = 2.0) -> None:
         deadline = time.time() + timeout

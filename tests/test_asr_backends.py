@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from app.asr_backends import SherpaOnnxBackend
+from app.asr_backends import BackendInitializationError, FunASRBackend, SherpaOnnxBackend, create_asr_backend
 from app.config import DEFAULT_CONFIG
 
 
@@ -66,14 +66,36 @@ class _FakeOnlineRecognizer:
         return recognizer
 
 
+class _FakeFunASRServer:
+    def __init__(self) -> None:
+        self.cleaned = False
+        self.paths: list[str] = []
+
+    def initialize(self) -> dict:
+        return {"success": True}
+
+    def transcribe_audio(self, audio_path: str, options: dict | None = None) -> dict:
+        self.paths.append(audio_path)
+        return {
+            "success": True,
+            "text": "你好世界",
+            "raw_text": "你好世界",
+            "duration": 1.0,
+            "language": "zh-CN",
+            "confidence": 0.8,
+        }
+
+    def cleanup(self) -> None:
+        self.cleaned = True
+
+
 class SherpaBackendTests(unittest.TestCase):
     def setUp(self) -> None:
         _FakeOnlineRecognizer.init_calls.clear()
         _FakeOnlineRecognizer.recognizers.clear()
 
-    def test_t_one_backend_uses_model_sample_rate_but_stream_input_rate(self) -> None:
+    def test_t_one_backend_uses_configured_sample_rate_consistently(self) -> None:
         config = copy.deepcopy(DEFAULT_CONFIG)
-        config["source"]["sample_rate"] = 16000
         config["asr"]["sherpa"]["sample_rate"] = 8000
 
         backend = SherpaOnnxBackend(config)
@@ -86,7 +108,16 @@ class SherpaBackendTests(unittest.TestCase):
 
         self.assertEqual(_FakeOnlineRecognizer.init_calls[0]["sample_rate"], 8000)
         stream = _FakeOnlineRecognizer.recognizers[0].streams[0]
-        self.assertEqual(stream.accept_calls[0][0], 16000)
+        self.assertEqual(stream.accept_calls[0][0], 8000)
+
+    def test_mismatched_source_and_model_sample_rates_fail_backend_initialization(self) -> None:
+        config = copy.deepcopy(DEFAULT_CONFIG)
+        config["source"]["sample_rate"] = 16000
+        config["asr"]["sherpa"]["sample_rate"] = 8000
+
+        backend = SherpaOnnxBackend(config)
+        with self.assertRaisesRegex(BackendInitializationError, "must match"):
+            backend.initialize()
 
     def test_continuous_segments_allow_same_final_text_after_reset(self) -> None:
         config = copy.deepcopy(DEFAULT_CONFIG)
@@ -108,6 +139,33 @@ class SherpaBackendTests(unittest.TestCase):
         self.assertEqual([event.is_final for event in first_events], [False, True])
         self.assertEqual([event.is_final for event in second_events], [False, True])
         self.assertEqual(recognizer.reset_calls, 2)
+
+    def test_create_backend_supports_funasr(self) -> None:
+        config = copy.deepcopy(DEFAULT_CONFIG)
+        config["asr"]["backend"] = "funasr"
+        backend = create_asr_backend(config)
+        self.assertIsInstance(backend, FunASRBackend)
+
+    def test_funasr_backend_transcribes_buffer_on_finalize(self) -> None:
+        config = copy.deepcopy(DEFAULT_CONFIG)
+        config["asr"]["backend"] = "funasr"
+        config["source"]["sample_rate"] = 16000
+        config["source"]["frame_ms"] = 40
+
+        fake_server = _FakeFunASRServer()
+        with patch("app.asr_backends.FunASRServer", return_value=fake_server):
+            backend = FunASRBackend(config)
+            backend.initialize()
+            backend.start_stream(session_id=7, source_kind="microphone", continuous_segments=False)
+            backend.push_audio(np.ones(1600, dtype=np.float32))
+            events = backend.finalize()
+            backend.cleanup()
+
+        self.assertEqual(len(events), 1)
+        self.assertTrue(events[0].is_final)
+        self.assertEqual(events[0].text, "你好世界")
+        self.assertEqual(events[0].session_id, 7)
+        self.assertEqual(fake_server.cleaned, True)
 
 
 if __name__ == "__main__":

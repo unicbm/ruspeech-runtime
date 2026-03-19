@@ -1,13 +1,13 @@
 <div align="center">
 
-# Ruspeech Runtime
+# Uni Speech Runtime
 
 **A Windows-first local streaming speech runtime for Russian dictation and realtime subtitles.**
 
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6?logo=windows&logoColor=white)](https://www.microsoft.com/windows/)
 [![Backend](https://img.shields.io/badge/ASR-sherpa--onnx-111111)](https://github.com/k2-fsa/sherpa-onnx)
-[![License](https://img.shields.io/github/license/unicbm/ruspeech-runtime)](./LICENSE)
+[![License](https://img.shields.io/github/license/unicbm/uni-speech-runtime)](./LICENSE)
 
 [简体中文](#简体中文) | [English](#english)
 
@@ -19,7 +19,7 @@
 <details open>
 <summary><b>简体中文</b></summary>
 
-> `Ruspeech Runtime` 是一个面向 Windows 的本地实时语音运行时，当前主要聚焦两类场景：
+> `Uni Speech Runtime` 是一个面向 Windows 的本地实时语音运行时，当前主要聚焦多语言本地听写与实时字幕场景：
 >
 > - 俄语麦克风语音输入
 > - 系统音频实时字幕
@@ -28,6 +28,7 @@
 
 - 本地运行，不依赖在线识别服务
 - 默认后端为 `sherpa-onnx`
+- 提供最简 Tk GUI 小窗口，支持启动/停止、热键录制和状态提示
 - 支持两种工作模式：`dictation` / `subtitles`
 - 支持两种输入源：`microphone` / `loopback`
 - 支持三种输出方式：`type_text` / `console_subtitles` / `overlay_subtitles`
@@ -46,10 +47,10 @@
 
 ### 项目定位
 
-这个仓库最初沿用了 `vocotype-cli` 的工程骨架，但当前默认启动路径已经转向新的俄语实时运行时架构。  
+这个仓库最初沿用了 `vocotype-cli` 的工程骨架，但当前默认启动路径已经转向新的多语言本地语音运行时架构。  
 如果你本地目录仍叫 `vocotype-cli`，这是迁移遗留，不代表项目正式名称。
 
-- 当前仓库地址：`https://github.com/unicbm/ruspeech-runtime`
+- 当前仓库地址：`https://github.com/unicbm/uni-speech-runtime`
 - 上游历史来源：`https://github.com/233stone/vocotype-cli`
 
 ### 架构概念
@@ -100,8 +101,8 @@ requirements-legacy-funasr.txt
 #### 方式一：自动安装
 
 ```powershell
-git clone https://github.com/unicbm/ruspeech-runtime.git
-cd ruspeech-runtime
+git clone https://github.com/unicbm/uni-speech-runtime.git
+cd uni-speech-runtime
 .\setup_runtime.bat
 ```
 
@@ -114,8 +115,8 @@ cd ruspeech-runtime
 #### 方式二：手动安装
 
 ```powershell
-git clone https://github.com/unicbm/ruspeech-runtime.git
-cd ruspeech-runtime
+git clone https://github.com/unicbm/uni-speech-runtime.git
+cd uni-speech-runtime
 python -m venv .venv
 .\.venv\Scripts\activate
 python -m pip install --upgrade pip
@@ -159,9 +160,25 @@ run_subtitles.bat
 ```powershell
 python main.py --config .\config.json
 python main.py --backend sherpa-onnx
+python main.py --backend funasr
 python main.py --once
 python main.py --save-dataset --dataset-dir .\dataset
 ```
+
+#### 图形界面
+
+```powershell
+python main_gui.py
+```
+
+GUI 提供：
+
+- 启动/停止运行时
+- 模式和后端切换
+- 热键录制时的小提示浮窗
+- 最近一次识别结果显示
+
+中文 `funasr` 后端已重新接回主入口，但当前限定为“麦克风听写”，不支持 loopback 字幕。
 
 ### 默认行为
 
@@ -185,7 +202,7 @@ python main.py --save-dataset --dataset-dir .\dataset
   "source": {
     "type": "microphone",
     "device": null,
-    "sample_rate": 16000,
+    "sample_rate": 8000,
     "channels": 1,
     "frame_ms": 20
   },
@@ -223,7 +240,7 @@ python main.py --save-dataset --dataset-dir .\dataset
   "mode": "subtitles",
   "source": {
     "type": "loopback",
-    "sample_rate": 16000,
+    "sample_rate": 8000,
     "channels": 2,
     "frame_ms": 20
   },
@@ -237,7 +254,7 @@ python main.py --save-dataset --dataset-dir .\dataset
 
 - 旧版 `audio.sample_rate` / `audio.block_ms` 会自动迁移到新的 `source` 结构
 - 保留了部分旧 FunASR 路径，但当前默认运行时不会走这些逻辑
-- 当前默认链路使用 `16000Hz` 采集音频，再交给模型按其配置采样率处理
+- 当前默认链路要求 `source.sample_rate` 与 `asr.sherpa.sample_rate` 保持一致，默认均为 `8000Hz`
 
 ### EXE 打包
 
@@ -250,10 +267,15 @@ python main.py --save-dataset --dataset-dir .\dataset
 生成产物：
 
 ```text
-dist\RuspeechRuntime\RuspeechRuntime.exe
+dist\UniSpeechRuntime\UniSpeechRuntime.exe
+dist\UniSpeechRuntime\UniSpeechRuntimeUI.exe
 ```
 
 这是一个 `one-folder` 打包，默认会把 `models/sherpa-onnx-ru-streaming` 一起带入输出目录。
+其中：
+
+- `UniSpeechRuntime.exe` 为 CLI 入口
+- `UniSpeechRuntimeUI.exe` 为最简 GUI 入口
 
 ### 测试与检查
 
@@ -268,8 +290,10 @@ python -m compileall main.py app tests
 
 - 新的流式运行时骨架
 - `sherpa-onnx` 默认后端接入
+- `funasr` 中文听写后端重新接回统一入口
 - Windows 文本注入输出
 - 控制台字幕与 Tk 浮窗字幕
+- 最简 Tk GUI 主控窗与热键录制提示
 - 配置迁移层与基础测试
 
 仍在演进：
@@ -296,7 +320,7 @@ python -m compileall main.py app tests
 <details>
 <summary><b>English</b></summary>
 
-> `Ruspeech Runtime` is a Windows-first local streaming speech runtime focused on:
+> `Uni Speech Runtime` is a Windows-first local speech runtime focused on multilingual local dictation and realtime subtitles:
 >
 > - Russian microphone dictation
 > - Realtime subtitles from system audio
@@ -305,6 +329,7 @@ python -m compileall main.py app tests
 
 - Fully local runtime, no online ASR service required
 - Default backend: `sherpa-onnx`
+- Includes a minimal Tk GUI window with start/stop controls, hotkey capture, and status prompts
 - Two runtime modes: `dictation` and `subtitles`
 - Two audio sources: `microphone` and `loopback`
 - Three output sinks: `type_text`, `console_subtitles`, and `overlay_subtitles`
@@ -325,7 +350,7 @@ python -m compileall main.py app tests
 
 This repository started from the `vocotype-cli` codebase, but the active runtime path has been reshaped into a dedicated Russian streaming runtime.
 
-- Current repo: `https://github.com/unicbm/ruspeech-runtime`
+- Current repo: `https://github.com/unicbm/uni-speech-runtime`
 - Historical upstream: `https://github.com/233stone/vocotype-cli`
 
 ### Runtime Model
@@ -375,8 +400,8 @@ requirements-legacy-funasr.txt
 #### Automatic setup
 
 ```powershell
-git clone https://github.com/unicbm/ruspeech-runtime.git
-cd ruspeech-runtime
+git clone https://github.com/unicbm/uni-speech-runtime.git
+cd uni-speech-runtime
 .\setup_runtime.bat
 ```
 
@@ -389,8 +414,8 @@ This script will:
 #### Manual setup
 
 ```powershell
-git clone https://github.com/unicbm/ruspeech-runtime.git
-cd ruspeech-runtime
+git clone https://github.com/unicbm/uni-speech-runtime.git
+cd uni-speech-runtime
 python -m venv .venv
 .\.venv\Scripts\activate
 python -m pip install --upgrade pip
@@ -434,9 +459,25 @@ run_subtitles.bat
 ```powershell
 python main.py --config .\config.json
 python main.py --backend sherpa-onnx
+python main.py --backend funasr
 python main.py --once
 python main.py --save-dataset --dataset-dir .\dataset
 ```
+
+#### GUI
+
+```powershell
+python main_gui.py
+```
+
+The GUI includes:
+
+- start/stop controls
+- mode and backend switching
+- a small floating prompt while recording or capturing a hotkey
+- the latest recognition result
+
+The Chinese `funasr` backend is wired back into the main app, but currently limited to microphone dictation only.
 
 ### Default Behavior
 
@@ -458,7 +499,7 @@ Hotkey semantics:
   "source": {
     "type": "microphone",
     "device": null,
-    "sample_rate": 16000,
+    "sample_rate": 8000,
     "channels": 1,
     "frame_ms": 20
   },
@@ -498,10 +539,14 @@ Hotkey semantics:
 Output:
 
 ```text
-dist\RuspeechRuntime\RuspeechRuntime.exe
+dist\UniSpeechRuntime\UniSpeechRuntime.exe
+dist\UniSpeechRuntime\UniSpeechRuntimeUI.exe
 ```
 
 This is a `one-folder` build and includes the default `models/sherpa-onnx-ru-streaming` directory.
+
+- `UniSpeechRuntime.exe` is the CLI entrypoint
+- `UniSpeechRuntimeUI.exe` is the GUI entrypoint
 
 ### Test
 
@@ -516,8 +561,10 @@ Implemented:
 
 - new streaming runtime skeleton
 - `sherpa-onnx` backend integration
+- `funasr` Chinese dictation backend reconnected to the unified app entry
 - Windows text injection output
 - console and Tk overlay subtitles
+- minimal Tk control window with hotkey recording prompts
 - config migration and baseline tests
 
 Still evolving:

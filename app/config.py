@@ -10,9 +10,10 @@ from typing import Any, Dict, Optional
 
 SUPPORTED_MODES = {"dictation", "subtitles"}
 SUPPORTED_SOURCES = {"microphone", "loopback"}
-SUPPORTED_BACKENDS = {"sherpa-onnx"}
+SUPPORTED_BACKENDS = {"sherpa-onnx", "funasr"}
 RESERVED_BACKENDS = {"vosk", "qwen3-asr", "qwen"}
 SUPPORTED_SINKS = {"type_text", "console_subtitles", "overlay_subtitles"}
+DEFAULT_CONFIG_FILENAME = "runtime-config.json"
 
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -20,7 +21,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "source": {
         "type": "microphone",
         "device": None,
-        "sample_rate": 16000,
+        "sample_rate": 8000,
         "channels": 1,
         "frame_ms": 20,
     },
@@ -51,6 +52,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "feature_dim": 80,
             "decoding_method": "greedy_search",
         },
+        "funasr": {
+            "language": "zh",
+            "batch_size_s": 60,
+            "hotword": "",
+            "use_vad": True,
+            "use_punc": True,
+        },
     },
     "output": {
         "method": "auto",
@@ -69,6 +77,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "linger_ms": 2500,
     },
     "logging": {"dir": "logs", "level": "INFO"},
+    "gui": {
+        "show_status_prompt": True,
+        "always_on_top": False,
+    },
 }
 
 
@@ -107,7 +119,10 @@ def _normalize_legacy_config(raw: Dict[str, Any]) -> Dict[str, Any]:
     asr.setdefault("provider", DEFAULT_CONFIG["asr"]["provider"])
     asr.setdefault("num_threads", DEFAULT_CONFIG["asr"]["num_threads"])
     asr.setdefault("enable_endpoint_detection", DEFAULT_CONFIG["asr"]["enable_endpoint_detection"])
-    asr.setdefault("sherpa", {})
+    sherpa = asr.setdefault("sherpa", {})
+    funasr = asr.setdefault("funasr", {})
+    for key, value in DEFAULT_CONFIG["asr"]["funasr"].items():
+        funasr.setdefault(key, value)
 
     output = config.setdefault("output", {})
     output.setdefault("method", DEFAULT_CONFIG["output"]["method"])
@@ -123,6 +138,7 @@ def _normalize_legacy_config(raw: Dict[str, Any]) -> Dict[str, Any]:
     source.setdefault("sample_rate", DEFAULT_CONFIG["source"]["sample_rate"])
     source.setdefault("channels", DEFAULT_CONFIG["source"]["channels"])
     source.setdefault("frame_ms", DEFAULT_CONFIG["source"]["frame_ms"])
+    sherpa.setdefault("sample_rate", source["sample_rate"])
 
     if "sinks" not in output:
         if config["mode"] == "subtitles":
@@ -132,6 +148,7 @@ def _normalize_legacy_config(raw: Dict[str, Any]) -> Dict[str, Any]:
 
     config.setdefault("overlay", copy.deepcopy(DEFAULT_CONFIG["overlay"]))
     config.setdefault("logging", copy.deepcopy(DEFAULT_CONFIG["logging"]))
+    config.setdefault("gui", copy.deepcopy(DEFAULT_CONFIG["gui"]))
     return config
 
 
@@ -149,6 +166,27 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
 
     normalized = _normalize_legacy_config(overrides)
     return validate_config(_merge_dict(config, normalized))
+
+
+def get_default_config_path() -> str:
+    return os.path.join(get_app_root(), DEFAULT_CONFIG_FILENAME)
+
+
+def resolve_config_path(path: Optional[str] = None) -> Optional[str]:
+    if path:
+        return os.path.expanduser(path)
+    default_path = get_default_config_path()
+    return default_path if os.path.exists(default_path) else None
+
+
+def save_config(config: Dict[str, Any], path: Optional[str] = None) -> str:
+    target_path = os.path.expanduser(path or get_default_config_path())
+    validated = validate_config(config)
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    with open(target_path, "w", encoding="utf-8") as file:
+        json.dump(validated, file, ensure_ascii=False, indent=2)
+        file.write("\n")
+    return target_path
 
 
 def apply_cli_overrides(
@@ -234,6 +272,8 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
     source_cfg["sample_rate"] = _require_positive_int(source_cfg.get("sample_rate"), "source.sample_rate")
     source_cfg["frame_ms"] = _require_positive_int(source_cfg.get("frame_ms"), "source.frame_ms")
     source_cfg["channels"] = _require_positive_int(source_cfg.get("channels", 1), "source.channels")
+    if int(source_cfg["sample_rate"] * source_cfg["frame_ms"] / 1000) <= 0:
+        raise ValueError("source.frame_ms is too small for the selected source.sample_rate")
 
     asr_cfg = validated.setdefault("asr", copy.deepcopy(DEFAULT_CONFIG["asr"]))
     backend_name = str(asr_cfg.get("backend", DEFAULT_CONFIG["asr"]["backend"])).lower()
@@ -243,6 +283,15 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError(f"Unsupported ASR backend: {backend_name}")
     asr_cfg["backend"] = backend_name
     asr_cfg["num_threads"] = _require_positive_int(asr_cfg.get("num_threads", 2), "asr.num_threads")
+    funasr_cfg = asr_cfg.setdefault("funasr", copy.deepcopy(DEFAULT_CONFIG["asr"]["funasr"]))
+    funasr_cfg["batch_size_s"] = _require_positive_int(
+        funasr_cfg.get("batch_size_s", DEFAULT_CONFIG["asr"]["funasr"]["batch_size_s"]),
+        "asr.funasr.batch_size_s",
+    )
+    funasr_cfg["hotword"] = str(funasr_cfg.get("hotword", DEFAULT_CONFIG["asr"]["funasr"]["hotword"]))
+    funasr_cfg["language"] = str(funasr_cfg.get("language", DEFAULT_CONFIG["asr"]["funasr"]["language"]))
+    funasr_cfg["use_vad"] = bool(funasr_cfg.get("use_vad", DEFAULT_CONFIG["asr"]["funasr"]["use_vad"]))
+    funasr_cfg["use_punc"] = bool(funasr_cfg.get("use_punc", DEFAULT_CONFIG["asr"]["funasr"]["use_punc"]))
 
     sherpa_cfg = asr_cfg.setdefault("sherpa", copy.deepcopy(DEFAULT_CONFIG["asr"]["sherpa"]))
     sherpa_cfg["sample_rate"] = _require_positive_int(
@@ -253,17 +302,22 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
         sherpa_cfg.get("feature_dim", DEFAULT_CONFIG["asr"]["sherpa"]["feature_dim"]),
         "asr.sherpa.feature_dim",
     )
-    _validate_optional_paths(
-        {
-            "asr.sherpa.model_dir": sherpa_cfg.get("model_dir"),
-            "asr.sherpa.tokens": sherpa_cfg.get("tokens"),
-            "asr.sherpa.encoder": sherpa_cfg.get("encoder"),
-            "asr.sherpa.decoder": sherpa_cfg.get("decoder"),
-            "asr.sherpa.joiner": sherpa_cfg.get("joiner"),
-            "asr.sherpa.model": sherpa_cfg.get("model"),
-            "asr.sherpa.paraformer": sherpa_cfg.get("paraformer"),
-        }
-    )
+    if backend_name == "sherpa-onnx":
+        if sherpa_cfg["sample_rate"] != source_cfg["sample_rate"]:
+            raise ValueError(
+                "source.sample_rate and asr.sherpa.sample_rate must match until resampling is implemented"
+            )
+        _validate_optional_paths(
+            {
+                "asr.sherpa.model_dir": sherpa_cfg.get("model_dir"),
+                "asr.sherpa.tokens": sherpa_cfg.get("tokens"),
+                "asr.sherpa.encoder": sherpa_cfg.get("encoder"),
+                "asr.sherpa.decoder": sherpa_cfg.get("decoder"),
+                "asr.sherpa.joiner": sherpa_cfg.get("joiner"),
+                "asr.sherpa.model": sherpa_cfg.get("model"),
+                "asr.sherpa.paraformer": sherpa_cfg.get("paraformer"),
+            }
+        )
 
     output_cfg = validated.setdefault("output", copy.deepcopy(DEFAULT_CONFIG["output"]))
     sinks = [str(item).lower() for item in output_cfg.get("sinks", [])]
@@ -278,6 +332,11 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("dictation mode requires the 'type_text' sink")
     if mode == "subtitles" and not {"console_subtitles", "overlay_subtitles"}.intersection(sinks):
         raise ValueError("subtitles mode requires at least one subtitle sink")
+    if backend_name == "funasr":
+        if mode != "dictation":
+            raise ValueError("ASR backend 'funasr' only supports dictation mode")
+        if source_type != "microphone":
+            raise ValueError("ASR backend 'funasr' only supports microphone input")
 
     return validated
 

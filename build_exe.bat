@@ -11,15 +11,7 @@ if not exist ".venv\Scripts\python.exe" (
 call .venv\Scripts\python.exe -m PyInstaller ^
   --noconfirm ^
   --clean ^
-  --name RuspeechRuntime ^
-  --onedir ^
-  --console ^
-  --collect-submodules sherpa_onnx ^
-  --hidden-import soundcard ^
-  --hidden-import keyboard ^
-  --hidden-import tkinter ^
-  --add-data "models\sherpa-onnx-ru-streaming;models\sherpa-onnx-ru-streaming" ^
-  main.py
+  UniSpeechRuntime.spec
 
 if errorlevel 1 (
   echo.
@@ -29,5 +21,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo Build complete. Output folder: dist\RuspeechRuntime
+echo Build complete. Output folder: dist\UniSpeechRuntime
+echo CLI: dist\UniSpeechRuntime\UniSpeechRuntime.exe
+echo GUI: dist\UniSpeechRuntime\UniSpeechRuntimeUI.exe
 pause

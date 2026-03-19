@@ -18,7 +18,14 @@ from .asr_backends import create_asr_backend
 from .audio_sources import create_audio_source
 from .config import ensure_logging_dir, load_config
 from .output_sinks import create_output_sinks
-from .runtime_types import ASRBackend, AudioSource, OutputSink, RecognitionEvent, TranscriptionResult
+from .runtime_types import (
+    ASRBackend,
+    AudioSource,
+    OutputSink,
+    RecognitionEvent,
+    RuntimeStatus,
+    TranscriptionResult,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -115,14 +122,17 @@ class VoiceRuntimeController:
         config_path: Optional[str] = None,
         config: Optional[dict] = None,
         on_result: Optional[Callable[[TranscriptionResult], None]] = None,
+        on_state_change: Optional[Callable[[RuntimeStatus], None]] = None,
         source: Optional[AudioSource] = None,
         backend: Optional[ASRBackend] = None,
         sinks: Optional[list[OutputSink]] = None,
     ) -> None:
         self.config = config if config is not None else load_config(config_path)
         self.on_result = on_result
+        self.on_state_change = on_state_change
         self.log_dir = ensure_logging_dir(self.config)
         self.mode = self.config.get("mode", "dictation")
+        self.backend_name = self.config["asr"].get("backend", "sherpa-onnx")
         self.source = source or create_audio_source(self.config)
         self.backend = backend or create_asr_backend(self.config)
         self.sinks = sinks if sinks is not None else create_output_sinks(self.config)
@@ -149,6 +159,7 @@ class VoiceRuntimeController:
             name="VoiceRuntimeDispatch",
         )
         self._dispatcher_thread.start()
+        self._emit_state_change()
 
     @property
     def is_running(self) -> bool:
@@ -165,6 +176,7 @@ class VoiceRuntimeController:
     def start(self) -> None:
         startup_error: Optional[Exception] = None
         session_token = 0
+        emit_starting = False
         with self._lock:
             if self._state in {self.STATE_STARTING, self.STATE_RUNNING, self.STATE_STOPPING}:
                 logger.debug("Runtime start ignored while state=%s", self._state)
@@ -172,6 +184,7 @@ class VoiceRuntimeController:
 
             self._state = self.STATE_STARTING
             self._last_error = None
+            emit_starting = True
             self._session_counter += 1
             self._session_id = self._session_counter
             self._active_session_token = self._session_counter
@@ -180,6 +193,8 @@ class VoiceRuntimeController:
             self._clear_recent_audio()
             self.last_segment_path = None
             session_token = self._active_session_token
+            if emit_starting:
+                self._emit_state_change()
 
             try:
                 self.backend.initialize()
@@ -205,6 +220,7 @@ class VoiceRuntimeController:
                 self._state = self.STATE_ERROR
                 self._running.clear()
                 self._teardown_token = session_token
+        self._emit_state_change()
 
         if startup_error is not None:
             self._shutdown_session(
@@ -271,7 +287,9 @@ class VoiceRuntimeController:
             self._teardown_token = self._active_session_token
             self._state = next_state
             self._running.clear()
-            return self._active_session_token
+            session_token = self._active_session_token
+        self._emit_state_change()
+        return session_token
 
     def _capture_loop(self, session_token: int) -> None:
         while self._running.is_set() and session_token == self._active_session_token:
@@ -301,6 +319,7 @@ class VoiceRuntimeController:
                 return
 
     def _handle_runtime_failure(self, session_token: int, error_message: str) -> None:
+        emit_change = False
         with self._lock:
             if session_token != self._active_session_token or self._teardown_token == session_token:
                 return
@@ -308,6 +327,10 @@ class VoiceRuntimeController:
             self._state = self.STATE_ERROR
             self._running.clear()
             self._teardown_token = session_token
+            emit_change = True
+
+        if emit_change:
+            self._emit_state_change()
 
         self._shutdown_session(
             session_token=session_token,
@@ -368,6 +391,7 @@ class VoiceRuntimeController:
                 self._teardown_token = 0
                 self._running.clear()
                 self._state = self.STATE_IDLE
+        self._emit_state_change()
 
     def _dispatch_loop(self) -> None:
         while True:
@@ -375,7 +399,14 @@ class VoiceRuntimeController:
             if queued_event is None:
                 return
             try:
-                self._emit_event(queued_event.event)
+                if self._should_emit_queued_event(queued_event.session_token):
+                    self._emit_event(queued_event.event)
+                else:
+                    logger.debug(
+                        "Dropping stale queued event for session_token=%s active_session_token=%s",
+                        queued_event.session_token,
+                        self._active_session_token,
+                    )
             finally:
                 self._dispatch_queue.task_done()
 
@@ -397,6 +428,13 @@ class VoiceRuntimeController:
             queued = self._dispatch_queue.put(_QueuedEvent(session_token=session_token, event=event))
             if not queued and not event.is_final:
                 logger.debug("Dropping partial recognition event because dispatch queue is full")
+
+    def _should_emit_queued_event(self, session_token: int) -> bool:
+        with self._lock:
+            active_session_token = self._active_session_token
+        if active_session_token == 0:
+            return True
+        return session_token == active_session_token
 
     def _append_recent_audio(self, samples: np.ndarray) -> None:
         frame = np.asarray(samples, dtype=np.float32).reshape(-1).copy()
@@ -463,3 +501,23 @@ class VoiceRuntimeController:
 
     def source_failed(self) -> bool:
         return not self.source.is_running and self._running.is_set()
+
+    def _emit_state_change(self) -> None:
+        if self.on_state_change is None:
+            return
+        try:
+            self.on_state_change(self.status)
+        except Exception:
+            logger.exception("State change handler failed")
+
+    @property
+    def status(self) -> RuntimeStatus:
+        return RuntimeStatus(
+            state=self._state,
+            mode=self.mode,
+            backend=self.backend_name,
+            source_kind=self.source.source_kind,
+            session_id=self._session_id,
+            is_running=self.is_running,
+            last_error=self._last_error,
+        )

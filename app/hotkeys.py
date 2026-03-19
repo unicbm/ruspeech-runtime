@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Callable
+from typing import Callable, Optional
 
 try:
     import keyboard
@@ -127,3 +127,64 @@ class HotkeyManager:
             keyboard.unhook_all()
         except Exception as exc:
             logger.warning("Failed to unhook keyboard listeners: %s", exc)
+
+
+class HotkeyRecorder:
+    def __init__(
+        self,
+        on_recorded: Callable[[str], None],
+        on_cancel: Optional[Callable[[], None]] = None,
+    ) -> None:
+        self.on_recorded = on_recorded
+        self.on_cancel = on_cancel
+        self._pressed: list[str] = []
+        self._pressed_set: set[str] = set()
+        self._hook = None
+        self._lock = threading.Lock()
+
+    def start(self) -> None:
+        with self._lock:
+            if self._hook is not None:
+                return
+            self._pressed.clear()
+            self._pressed_set.clear()
+            self._hook = keyboard.hook(self._handle_event, suppress=True)
+
+    def stop(self) -> None:
+        with self._lock:
+            hook = self._hook
+            self._hook = None
+            self._pressed.clear()
+            self._pressed_set.clear()
+        if hook is not None:
+            try:
+                keyboard.unhook(hook)
+            except Exception as exc:
+                logger.debug("Failed to stop hotkey recorder: %s", exc)
+
+    def _handle_event(self, event) -> None:
+        key_name = _normalize_key_name(getattr(event, "name", ""))
+        if not key_name:
+            return
+
+        if event.event_type == "down":
+            if key_name == "esc" and not self._pressed_set:
+                self.stop()
+                if self.on_cancel is not None:
+                    self.on_cancel()
+                return
+            if key_name not in self._pressed_set:
+                self._pressed.append(key_name)
+                self._pressed_set.add(key_name)
+            return
+
+        if key_name not in self._pressed_set:
+            return
+        self._pressed_set.discard(key_name)
+        if self._pressed_set:
+            return
+
+        combo = "+".join(self._pressed)
+        self.stop()
+        if combo:
+            self.on_recorded(combo)

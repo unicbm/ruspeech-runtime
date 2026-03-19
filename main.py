@@ -17,6 +17,7 @@ from app import (
     apply_cli_overrides,
     ensure_logging_dir,
     load_config,
+    resolve_config_path,
     resolve_hotkey_mode,
 )
 from app.hotkeys import HotkeyManager
@@ -37,7 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", help="Path to config JSON")
     parser.add_argument("--mode", choices=["dictation", "subtitles"], help="Override runtime mode")
     parser.add_argument("--source", choices=["microphone", "loopback"], help="Override audio source")
-    parser.add_argument("--backend", choices=["sherpa-onnx"], help="Override ASR backend")
+    parser.add_argument("--backend", choices=["sherpa-onnx", "funasr"], help="Override ASR backend")
     parser.add_argument("--once", action="store_true", help="Run a single capture cycle for debugging")
     parser.add_argument("--save-dataset", action="store_true", help="Persist audio/text pairs")
     parser.add_argument("--dataset-dir", default="dataset", help="Dataset output directory")
@@ -49,8 +50,9 @@ def main() -> int:
     hotkeys: Optional[HotkeyManager] = None
     try:
         args = parse_args()
+        config_path = resolve_config_path(args.config)
         config = apply_cli_overrides(
-            load_config(args.config),
+            load_config(config_path),
             mode=args.mode,
             source=args.source,
             backend=args.backend,
@@ -59,7 +61,7 @@ def main() -> int:
         log_dir_abs = ensure_logging_dir(config)
         setup_logging(level=config["logging"].get("level", "INFO"), log_dir=log_dir_abs)
 
-        controller = VoiceRuntimeController(config_path=args.config, config=config, on_result=None)
+        controller = VoiceRuntimeController(config_path=config_path, config=config, on_result=None)
         controller.on_result = _make_result_handler(controller)
         if args.save_dataset:
             controller.on_result = wrap_result_handler(controller.on_result, controller, args.dataset_dir)

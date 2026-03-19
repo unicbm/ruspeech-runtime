@@ -58,6 +58,17 @@ class TranscriptionResult:
         )
 
 
+@dataclass(slots=True)
+class RuntimeStatus:
+    state: str
+    mode: str
+    backend: str
+    source_kind: str
+    session_id: int
+    is_running: bool
+    last_error: Optional[str] = None
+
+
 class AudioSource(ABC):
     source_kind = "microphone"
 
